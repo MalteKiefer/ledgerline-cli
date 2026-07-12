@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
@@ -97,6 +98,14 @@ func Open(sealed Sealed, key []byte) ([]byte, error) {
 		return nil, ErrDecrypt
 	}
 	return out, nil
+}
+
+// GenericHashKey reproduces libsodium crypto_generichash(32, input): a keyless
+// BLAKE2b digest truncated to a 32-byte key, used to turn the recovery bytes
+// into a key-encryption key.
+func GenericHashKey(input []byte) []byte {
+	sum := blake2b.Sum256(input)
+	return sum[:]
 }
 
 // DeriveKEK reproduces vault.js deriveKek: Argon2id (ALG_ARGON2ID13) over the

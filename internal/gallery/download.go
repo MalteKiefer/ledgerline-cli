@@ -75,13 +75,29 @@ func Plan(records []PhotoRecord, outDir string, f Filter) []Target {
 		if nameCount[strings.ToLower(name)] > 1 {
 			name = disambiguate(name, rec.ID)
 		}
+		path := filepath.Join(outDir, name)
+		if !withinDir(outDir, path) {
+			// A hostile record name must never write outside the target; fall
+			// back to the id-based safe name.
+			path = filepath.Join(outDir, rec.ID+extForMime(rec.Mime))
+		}
 		targets = append(targets, Target{
 			Rec:  rec,
-			Path: filepath.Join(outDir, name),
+			Path: path,
 			When: parseTaken(rec.TakenAt),
 		})
 	}
 	return targets
+}
+
+// withinDir reports whether path stays inside dir (guards against traversal via
+// a crafted record name).
+func withinDir(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // FetchOriginal downloads and decrypts a photo's original bytes.
@@ -101,7 +117,8 @@ func FetchOriginal(ctx context.Context, client *api.Client, vaultKey []byte, rec
 // missing or unsafe.
 func cleanName(rec PhotoRecord) string {
 	name := filepath.Base(strings.TrimSpace(rec.Name))
-	if name == "" || name == "." || name == string(filepath.Separator) || strings.ContainsAny(name, "/\\") {
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) ||
+		strings.ContainsAny(name, "/\\") || strings.ContainsRune(name, 0) {
 		return rec.ID + extForMime(rec.Mime)
 	}
 	return name
