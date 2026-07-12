@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -70,7 +71,10 @@ func runFilesOpen(cmd *cobra.Command, path string, wait bool) error {
 	if err != nil {
 		return err
 	}
-	dest := filepath.Join(dir, fv.Name)
+	dest := filepath.Join(dir, safeTempName(fv.Name))
+	if rel, rerr := filepath.Rel(dir, dest); rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("unsafe file name")
+	}
 	if err := os.WriteFile(dest, data, 0o600); err != nil {
 		return err
 	}
@@ -89,6 +93,21 @@ func runFilesOpen(cmd *cobra.Command, path string, wait bool) error {
 	}
 	fmt.Fprintf(w, "Temporary decrypted copy: %s\n", dest)
 	return nil
+}
+
+// safeTempName reduces a manifest file name to a safe basename for the temp
+// copy: no directory components, no "."/".." and no leading "-" (which an opener
+// could read as a flag). Falls back to a fixed name when nothing safe remains.
+func safeTempName(name string) string {
+	base := filepath.Base(name)
+	if base == "." || base == ".." || base == string(filepath.Separator) ||
+		strings.ContainsAny(base, "/\\") || strings.ContainsRune(base, 0) {
+		return "file"
+	}
+	if strings.HasPrefix(base, "-") {
+		base = "_" + base
+	}
+	return base
 }
 
 // openInApp launches the OS default application for a path. With wait it blocks
