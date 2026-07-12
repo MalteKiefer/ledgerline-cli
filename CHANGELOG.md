@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-12
+
+### Added
+
+- `gallery upload` — end-to-end-encrypted photo/video upload (folder and Google
+  Photos Takeout modes). Files are encrypted on the client before upload; the
+  server only ever stores ciphertext.
+  - Reproduces the web vault's cryptography in Go (crypto_secretbox, Argon2id,
+    and a from-scratch XChaCha20-Poly1305 secretstream), verified byte-for-byte
+    against libsodium known-answer tests, so uploads interoperate with the web
+    and Android clients.
+  - Derives and seals thumbnails, medium renditions, EXIF, location, perceptual
+    hash and — with `--ml` — face crops and search embeddings, exactly as the
+    web client stores them, into the sharded v2 gallery manifest.
+  - Handles Live / Motion photos from any vendor: a same-named video is paired as
+    the motion clip, Apple Live Photos split across two files are paired by
+    content id, and Google/Samsung embedded Motion Photos are extracted.
+  - Accepts all common image and video formats (including RAW and HEIC/HEIF/AVIF)
+    and skips byte-identical duplicates already in the gallery.
+  - `-d`/`--delete` removes each local file only after its upload is saved and the
+    stored copy has been re-downloaded, decrypted and verified byte-for-byte.
+- `internal/crypto`, `internal/vault` and `internal/gallery` packages.
+
 ## [0.1.0] - 2026-07-12
 
 ### Added
@@ -30,5 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MalteKiefer/ledgerline-cli/releases/tag/v0.1.0

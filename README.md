@@ -4,7 +4,7 @@ A console client for a self-hosted [Ledgerline](https://github.com/MalteKiefer/L
 server, written in Go. It runs on **Linux** and **macOS**.
 
 The client is designed to grow into a full-featured tool. Today it covers secure
-authentication and defines the gallery-upload surface; more commands will follow.
+authentication and end-to-end-encrypted gallery upload; more commands will follow.
 
 Authentication is **zero-knowledge by design**: the stored credential proves your
 identity to the server and nothing more. It never unlocks your vault, and the CLI
@@ -168,8 +168,12 @@ Logged out.
 
 ### `gallery upload`
 
-The command surface is available now; the upload pipeline is delivered in a
-later release. Folder mode:
+Upload photos and videos to the gallery. Everything is **encrypted on your
+machine** before it leaves it — the server only ever sees ciphertext. Uploading
+requires your vault passphrase (prompted, never echoed), which unlocks the vault
+key locally; the passphrase and key never leave the machine.
+
+Folder mode:
 
 ```sh
 ledgerline-cli gallery upload -f /path/to/folder [-r]
@@ -183,10 +187,32 @@ ledgerline-cli gallery upload --google-photos -z /path/to/takeout.zip
 
 | Flag | Description |
 | --- | --- |
-| `-f`, `--folder` | Source folder to upload images from. |
-| `-r`, `--recursive` | Include images in subfolders. |
+| `-f`, `--folder` | Source folder to upload from. |
+| `-r`, `--recursive` | Include subfolders. |
 | `--google-photos` | Import from a Google Photos (Takeout) export. |
 | `-z`, `--zip` | Path to the Google Photos export `.zip`. |
+| `--ml` | Run face detection + search embeddings inline (needs the server's ML service). Without it, the web client analyses photos later. |
+| `-d`, `--delete` | Delete each local file **after** its upload is saved and the stored copy has been re-downloaded, decrypted and verified byte-for-byte. |
+
+What it handles, matching the web app:
+
+- **All common image and video formats** (JPEG/PNG/HEIC/HEIF/AVIF/TIFF/…, RAW,
+  and MOV/MP4/HEVC/…); unsupported files are reported and skipped, not fatal.
+- **Live / Motion photos from any vendor.** A same-named video beside a photo, an
+  Apple Live Photo split across two files (paired by its content id), and a
+  Google/Samsung Motion Photo with an embedded clip are all stored as one photo
+  with its motion clip.
+- **Thumbnails and metadata.** Thumbnail, medium rendition, EXIF, location,
+  perceptual hash (and, with `--ml`, face crops + embeddings) are derived and
+  sealed exactly as the web client stores them.
+- **Duplicate skipping.** A byte-identical file already in the gallery is skipped
+  (matched by size + a hash of its head and tail).
+- **Resumable & safe.** Progress is saved periodically; `--delete` only removes a
+  local file once its encrypted copy is provably retrievable.
+
+> The gallery is zero-knowledge, so uploads are only reversible from the web app
+> (or by deleting the photo there). `--delete` removes local originals — keep a
+> backup until you have verified a batch.
 
 ## How authentication works
 
@@ -234,11 +260,18 @@ consistent:
 ```
 cmd/                 command tree (root, status, auth, gallery)
 internal/api/        typed HTTP client for the /api/v1 surface
+internal/crypto/     libsodium-compatible crypto (secretbox, Argon2id, secretstream)
+internal/vault/      passphrase → vault key unlock
+internal/gallery/    manifest v2, upload pipeline, Live Photo pairing, sources
 internal/session/    durable credential storage (keychain + file fallback)
 internal/config/     config-directory resolution
 internal/version/    build metadata and update checks
 internal/ui/         prompts and spinner
 ```
+
+The gallery crypto reproduces the web vault (`resources/js/vault.js`) byte for
+byte and is verified against libsodium-generated known-answer tests, so photos
+uploaded by the CLI are readable in the web and Android clients and vice versa.
 
 ## Versioning
 
