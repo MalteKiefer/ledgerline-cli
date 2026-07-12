@@ -144,6 +144,19 @@ func (s *Store) indexSigs(photos []json.RawMessage) {
 // ones appended this session).
 func (s *Store) HasSig(sig string) bool { return sig != "" && s.sigs[sig] }
 
+// Records returns the loaded photo records (typed) for read-only use such as
+// download. Unknown fields on a record are ignored.
+func (s *Store) Records() []PhotoRecord {
+	out := make([]PhotoRecord, 0, len(s.basePhotos))
+	for _, raw := range s.basePhotos {
+		var r PhotoRecord
+		if err := json.Unmarshal(raw, &r); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Add appends a finished photo record and remembers its signature.
 func (s *Store) Add(rec *PhotoRecord) error {
 	s.added = append(s.added, rec)

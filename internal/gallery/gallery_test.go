@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
@@ -292,6 +293,66 @@ func TestMergeLivePhotosByContentID(t *testing.T) {
 	}
 	if lone.merged {
 		t.Fatal("unmatched video must remain its own record")
+	}
+}
+
+func TestDownloadFilter(t *testing.T) {
+	all := Filter{Images: true, Videos: true}
+	if !all.Includes(PhotoRecord{MediaType: "image", TakenAt: "2021-01-01T00:00:00"}) {
+		t.Fatal("image should be included")
+	}
+	if all.Includes(PhotoRecord{MediaType: "image", Trashed: "2021-01-02T00:00:00"}) {
+		t.Fatal("trashed photo must be excluded")
+	}
+
+	imagesOnly := Filter{Images: true}
+	if imagesOnly.Includes(PhotoRecord{MediaType: "video"}) {
+		t.Fatal("--images must exclude videos")
+	}
+	videosOnly := Filter{Videos: true}
+	if videosOnly.Includes(PhotoRecord{MediaType: "image"}) {
+		t.Fatal("--videos must exclude images")
+	}
+
+	ranged := Filter{
+		Images: true, Videos: true,
+		From: time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2021, 6, 30, 23, 59, 59, 0, time.UTC),
+	}
+	if !ranged.Includes(PhotoRecord{MediaType: "image", TakenAt: "2021-06-15T12:00:00"}) {
+		t.Fatal("in-range photo should be included")
+	}
+	if ranged.Includes(PhotoRecord{MediaType: "image", TakenAt: "2021-07-01T00:00:00"}) {
+		t.Fatal("out-of-range photo must be excluded")
+	}
+	if ranged.Includes(PhotoRecord{MediaType: "image", TakenAt: ""}) {
+		t.Fatal("undated photo must be excluded when a date bound is set")
+	}
+}
+
+func TestDownloadPlanDisambiguatesNames(t *testing.T) {
+	recs := []PhotoRecord{
+		{ID: "aaaaaaaa1111", Name: "IMG_1.jpg", MediaType: "image"},
+		{ID: "bbbbbbbb2222", Name: "IMG_1.jpg", MediaType: "image"}, // same name → disambiguate
+		{ID: "cccccccc3333", Name: "IMG_2.jpg", MediaType: "image"}, // unique name → kept as-is
+		{ID: "dddddddd4444", Name: "trashed.jpg", MediaType: "image", Trashed: "2021-01-01T00:00:00"},
+	}
+	targets := Plan(recs, "/out", Filter{Images: true, Videos: true})
+	if len(targets) != 3 {
+		t.Fatalf("want 3 targets (trashed excluded), got %d", len(targets))
+	}
+	paths := map[string]bool{}
+	for _, tg := range targets {
+		if paths[tg.Path] {
+			t.Fatalf("duplicate target path: %s", tg.Path)
+		}
+		paths[tg.Path] = true
+	}
+	if !paths["/out/IMG_2.jpg"] {
+		t.Fatal("uniquely-named photo should keep its name")
+	}
+	if !paths["/out/IMG_1_aaaaaaaa.jpg"] || !paths["/out/IMG_1_bbbbbbbb.jpg"] {
+		t.Fatalf("colliding names should be disambiguated by id: %+v", paths)
 	}
 }
 

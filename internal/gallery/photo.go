@@ -47,6 +47,7 @@ type PhotoRecord struct {
 	HasFaces     *int     `json:"hasFaces"`
 	FaceCropRefs []string `json:"faceCropRefs"`
 	MlPending    bool     `json:"mlPending,omitempty"`
+	Trashed      string   `json:"trashed,omitempty"` // soft-delete timestamp; set = in the trash
 
 	// Session-only bookkeeping (never serialised): the Apple content id used to
 	// merge a Live Photo's still and video halves, and a flag marking a video

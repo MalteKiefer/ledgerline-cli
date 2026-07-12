@@ -29,7 +29,7 @@ func newGalleryCommand() *cobra.Command {
 		Use:   "gallery",
 		Short: "Work with the photo gallery",
 	}
-	cmd.AddCommand(newGalleryUploadCommand())
+	cmd.AddCommand(newGalleryUploadCommand(), newGalleryDownloadCommand())
 	return cmd
 }
 

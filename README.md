@@ -21,6 +21,7 @@ collects no telemetry.
   - [`auth status`](#auth-status)
   - [`auth logout`](#auth-logout)
   - [`gallery upload`](#gallery-upload)
+  - [`gallery download`](#gallery-download)
 - [How authentication works](#how-authentication-works)
 - [Security notes](#security-notes)
 - [Development](#development)
@@ -213,6 +214,29 @@ What it handles, matching the web app:
 > The gallery is zero-knowledge, so uploads are only reversible from the web app
 > (or by deleting the photo there). `--delete` removes local originals — keep a
 > backup until you have verified a batch.
+
+### `gallery download`
+
+Download and decrypt the gallery to a local folder (a plaintext export/backup).
+Requires the vault passphrase.
+
+```sh
+ledgerline-cli gallery download -o /path/to/folder
+```
+
+| Flag | Description |
+| --- | --- |
+| `-o`, `--output` | Destination folder (required). |
+| `--from` | Only photos taken on or after this date (`YYYY-MM-DD`, inclusive). |
+| `--to` | Only photos taken on or before this date (`YYYY-MM-DD`, inclusive). |
+| `--images` | Only images. |
+| `--videos` | Only videos. Pass both, or neither, for everything. |
+| `--force` | Overwrite files that already exist in the target. |
+
+Each photo is written under its original filename (a short id is appended when
+two photos share a name), with its capture time set as the file's modification
+time. Files already present are skipped unless `--force` is given, so the command
+is resumable. Trashed photos are never downloaded.
 
 ## How authentication works
 

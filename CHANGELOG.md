@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and skips byte-identical duplicates already in the gallery.
   - `-d`/`--delete` removes each local file only after its upload is saved and the
     stored copy has been re-downloaded, decrypted and verified byte-for-byte.
+- `gallery download` — decrypt and download the gallery to a local folder (a
+  plaintext export). Restrict with `--from`/`--to` (date range), `--images` or
+  `--videos`; existing files are skipped unless `--force`. Each file keeps its
+  original name (id-suffixed on collisions) and capture time; trashed photos are
+  excluded.
 - `internal/crypto`, `internal/vault` and `internal/gallery` packages.
 
 ## [0.1.0] - 2026-07-12
