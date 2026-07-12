@@ -34,6 +34,7 @@ func NewRootCommand() *cobra.Command {
 		newAuthCommand(),
 		newGalleryCommand(),
 		newFilesCommand(),
+		newTodoCommand(),
 	)
 	return root
 }

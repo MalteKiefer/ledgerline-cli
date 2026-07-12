@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Conflict handling via `--conflict` (`keep-both` | `newest` | `skip`).
     - `--hidden` for dotfiles, ignore patterns from the settings file plus
       `--ignore`, and `--dry-run` to preview.
+- `todo` command group — manage encrypted todos and lists (also in the shared
+  manifest; other modules preserved): `ls` (filter by list/tag, open/done/marked/
+  trash), `add` (title, `--desc/--url/--due/--priority/--list/--tags/--mark`),
+  `done`/`undone`, `mark`/`unmark`, `edit`, `rm` (`--force` to delete),
+  `restore`, and `lists` (`add`/`rm`/`rename`). Todos are referenced by a short
+  id prefix.
+- `files open <path>` — decrypt a file to a private temp copy and open it with
+  the OS default app (`--wait` deletes the copy after the app closes).
 - User-editable settings file (`settings.json` in the config dir): `ignore`
   patterns, sync `sync` mappings, and a `hidden` default.
 - `gallery upload --batch N` — flush (save, and with `--delete` remove verified

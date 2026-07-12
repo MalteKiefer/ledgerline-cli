@@ -198,8 +198,13 @@ func applyOps(base []json.RawMessage, ops []op, forFiles bool) []json.RawMessage
 		}
 	}
 
-	out := make([]json.RawMessage, 0, len(base)+len(adds))
-	for _, raw := range base {
+	// Patches and deletes apply across BOTH base and same-session adds.
+	combined := make([]json.RawMessage, 0, len(base)+len(adds))
+	combined = append(combined, base...)
+	combined = append(combined, adds...)
+
+	out := make([]json.RawMessage, 0, len(combined))
+	for _, raw := range combined {
 		id := recordID(raw)
 		if deleted[id] {
 			continue
@@ -211,7 +216,7 @@ func applyOps(base []json.RawMessage, ops []op, forFiles bool) []json.RawMessage
 		}
 		out = append(out, raw)
 	}
-	return append(out, adds...)
+	return out
 }
 
 // decodeArray unmarshals a manifest array key into raw elements (nil-safe).

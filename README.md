@@ -288,6 +288,22 @@ config dir) so it can tell which side changed since the last run.
 }
 ```
 
+### `todo`
+
+Manage encrypted todos and lists.
+
+```sh
+ledgerline-cli todo ls [--list NAME] [--tag T] [--all|--done|--marked|--trash]
+ledgerline-cli todo add "Buy milk" --due 2026-07-20 --priority high --list Home
+ledgerline-cli todo done <id>        # also: undone, mark, unmark, restore
+ledgerline-cli todo edit <id> --title … --due … --list … --priority …
+ledgerline-cli todo rm <id> [--force]
+ledgerline-cli todo lists            # add <name> | rm <name> | rename <old> <new>
+```
+
+Todos are referenced by the short id shown in `todo ls` (a unique prefix is
+enough). `--list` on `add`/`edit` creates the list if it does not exist.
+
 ## How authentication works
 
 The CLI reuses the same server mechanism as the Ledgerline mobile app. The app
