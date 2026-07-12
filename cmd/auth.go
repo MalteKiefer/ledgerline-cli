@@ -200,7 +200,7 @@ func runLogin(cmd *cobra.Command, serverFlag, codeFlag, deviceFlag string) error
 	if err != nil {
 		return err
 	}
-	user, _, err := authed.Me(ctx)
+	user, _, _, err := authed.Me(ctx)
 	if err != nil {
 		return fmt.Errorf("token verification failed: %w", err)
 	}
@@ -309,7 +309,7 @@ func newAuthStatusCommand() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 			defer cancel()
 
-			user, usage, err := client.Me(ctx)
+			user, usage, _, err := client.Me(ctx)
 			if err != nil {
 				if api.Status(err) == 401 {
 					// Revoked from the web or expired — clear local state cleanly.

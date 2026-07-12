@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the key lives in the OS keychain (or a 0600 file with a warning). A logout or a
   server-side device revoke clears it, and any 401 wipes the local credential and
   cached key cleanly. `auth status` shows the vault lock state.
+- Remote kill switch + sync heartbeat: the CLI reports sync activity to the
+  server (so the web shows whether a client is syncing), and when the owner
+  requests a remote wipe from the web the client erases all local state
+  (credential, cached key, sync state, settings) on its next contact.
 - User-editable settings file (`settings.json` in the config dir): `ignore`
   patterns, sync `sync` mappings, and a `hidden` default.
 - `gallery upload --batch N` — flush (save, and with `--delete` remove verified

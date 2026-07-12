@@ -184,6 +184,19 @@ func Clear() error {
 	return nil
 }
 
+// WipeLocal erases all local state: the credential and cached vault key (keychain
+// + config), plus everything else in the config directory (sync state, settings).
+// Used by the remote kill switch.
+func WipeLocal() error {
+	// Clear() first so it can read the state to delete the right keychain entries.
+	_ = Clear()
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 // SaveVaultKey caches the unlocked vault key until expires, so decrypting
 // commands need not re-prompt for the passphrase within the window. It is stored
 // in the OS keychain when the token is, and otherwise inline in the 0600 config

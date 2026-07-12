@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -110,9 +111,19 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 		return err
 	}
 
+	if !fl.dryRun {
+		if reportSync(ctx, client, "syncing", "files sync") {
+			return wipedError()
+		}
+		defer reportSync(context.WithoutCancel(ctx), client, "idle", "")
+	}
+
 	var total files.SyncResult
 	for _, m := range mappings {
 		fmt.Fprintf(w, "Sync %q ⇄ %s\n", displayRemote(m.Remote), m.Local)
+		if !fl.dryRun && reportSync(ctx, client, "syncing", "files sync "+displayRemote(m.Remote)) {
+			return wipedError()
+		}
 		syncer := files.NewSyncer(client, store, vk, m.Local, m.Remote, opts)
 		res, err := syncer.Run(ctx)
 		if err != nil {

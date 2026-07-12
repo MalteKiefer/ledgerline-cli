@@ -123,6 +123,11 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	uploader := gallery.NewUploader(client, store, vk, opts.withML)
 	fmt.Fprintf(out, "Uploading %d item(s)%s…\n", len(items), mlNote(opts.withML))
 
+	if reportSync(ctx, client, "syncing", "gallery upload") {
+		return wipedError()
+	}
+	defer reportSync(context.WithoutCancel(ctx), client, "idle", "")
+
 	batch := opts.batch
 	if batch < 1 {
 		batch = defaultBatch
@@ -136,6 +141,9 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 		if run.sinceSave >= batch {
 			if err := run.flush(); err != nil {
 				return err
+			}
+			if reportSync(ctx, client, "syncing", fmt.Sprintf("gallery upload %d/%d", i+1, len(items))) {
+				return wipedError()
 			}
 		}
 	}
@@ -277,7 +285,8 @@ func authedClient(ctx context.Context) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := client.Me(ctx); err != nil {
+	_, _, wipe, err := client.Me(ctx)
+	if err != nil {
 		if api.Status(err) == 401 {
 			// The device was revoked from the web or the token expired. Wipe the
 			// local credential AND any cached vault key so nothing stale lingers.
@@ -286,7 +295,31 @@ func authedClient(ctx context.Context) (*api.Client, error) {
 		}
 		return nil, err
 	}
+	if wipe {
+		// Remote kill switch: the owner asked to wipe this client. Erase all local
+		// state and stop.
+		_ = session.WipeLocal()
+		return nil, errors.New("this client was wiped remotely from the web; all local data was erased")
+	}
 	return client, nil
+}
+
+// reportSync sends a best-effort heartbeat (so the web shows sync activity) and
+// returns whether a remote wipe is now pending. Errors are ignored — a heartbeat
+// must never break an operation.
+func reportSync(ctx context.Context, client *api.Client, state, detail string) (wipe bool) {
+	w, err := client.Heartbeat(ctx, state, detail)
+	if err != nil {
+		return false
+	}
+	return w
+}
+
+// wipedError erases all local state (remote kill switch) and returns the error to
+// stop the current command.
+func wipedError() error {
+	_ = session.WipeLocal()
+	return errors.New("this client was wiped remotely from the web; all local data was erased")
 }
 
 // unlockVault yields the vault key: it uses a valid cached key (no prompt) if one

@@ -110,7 +110,7 @@ func TestMeSendsBearerAndDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, usage, err := c.Me(context.Background())
+	user, usage, _, err := c.Me(context.Background())
 	if err != nil {
 		t.Fatalf("Me: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestMeUnauthorizedMapsTo401(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(t, srv)
-	_, _, err := c.Me(context.Background())
+	_, _, _, err := c.Me(context.Background())
 	if Status(err) != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %v", err)
 	}
