@@ -160,18 +160,28 @@ func (c *Client) request(ctx context.Context, method, path string, body, out any
 	return json.Unmarshal(data, out)
 }
 
-// setHeaders applies the standard headers: JSON accept, XHR marker (so Laravel
-// answers with JSON, never an HTML redirect), the bearer, and a UA carrying the
-// version for server-side diagnostics.
-func (c *Client) setHeaders(req *http.Request, hasBody bool) {
+// endpoint joins the base URL with a request path.
+func (c *Client) endpoint(path string) string { return c.baseURL.String() + path }
+
+// applyAuth sets the headers common to every request: JSON accept, the XHR
+// marker (so Laravel answers with JSON, never an HTML redirect), the bearer, and
+// a UA carrying the version for server-side diagnostics. It does not set a
+// Content-Type, so multipart callers can set their own.
+func (c *Client) applyAuth(req *http.Request) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("User-Agent", "ledgerline-cli/"+version.Version)
-	if hasBody {
-		req.Header.Set("Content-Type", "application/json")
-	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+}
+
+// setHeaders applies the common headers plus a JSON Content-Type when a body is
+// present.
+func (c *Client) setHeaders(req *http.Request, hasBody bool) {
+	c.applyAuth(req)
+	if hasBody {
+		req.Header.Set("Content-Type", "application/json")
 	}
 }
 
