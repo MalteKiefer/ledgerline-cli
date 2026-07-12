@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-12
+
+### Added
+
+- `files` command group — a full sync client for the zero-knowledge Files module
+  (which lives in the shared workspace manifest; other modules like notes and
+  bookmarks are always preserved verbatim).
+  - `files upload` — upload a local folder tree, recreating subfolders; a changed
+    file adds a version, an unchanged one is skipped. `--hidden` includes dotfiles.
+  - `files download` — decrypt files to a local folder, preserving the tree;
+    `--remote` limits to a subtree, `--force` overwrites.
+  - `files sync` — **bidirectional** sync between local folders and the encrypted
+    files, with a local sync-state database to detect which side changed:
+    - Map one or more remote folders to local directories (`--map remote:local`,
+      repeatable) or map the whole store into one folder; mappings can also live
+      in the settings file.
+    - Deletion propagation via `--delete` (`both` | `additive` | `to-remote`).
+    - Conflict handling via `--conflict` (`keep-both` | `newest` | `skip`).
+    - `--hidden` for dotfiles, ignore patterns from the settings file plus
+      `--ignore`, and `--dry-run` to preview.
+- User-editable settings file (`settings.json` in the config dir): `ignore`
+  patterns, sync `sync` mappings, and a `hidden` default.
+- `gallery upload --batch N` — flush (save, and with `--delete` remove verified
+  local files) after every N uploads instead of a fixed 50.
+- `internal/files` and `internal/settings` packages; shared blob helpers.
+
 ## [0.2.0] - 2026-07-12
 
 ### Added
@@ -58,6 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MalteKiefer/ledgerline-cli/releases/tag/v0.1.0

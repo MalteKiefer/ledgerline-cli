@@ -19,9 +19,9 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/vault"
 )
 
-// saveEvery bounds how many photos are uploaded before the manifest is flushed,
-// so an interrupted run keeps most of its progress.
-const saveEvery = 50
+// defaultBatch is how many photos are uploaded before the manifest is flushed
+// (and, with --delete, verified local files removed) when --batch is not set.
+const defaultBatch = 50
 
 // newGalleryCommand builds the `gallery` group.
 func newGalleryCommand() *cobra.Command {
@@ -70,6 +70,7 @@ func newGalleryUploadCommand() *cobra.Command {
 	f.StringVarP(&opts.zipPath, "zip", "z", "", "path to the Google Photos export .zip")
 	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings inline (needs the server ML service)")
 	f.BoolVarP(&opts.deleteLocal, "delete", "d", false, "delete each local file after its upload is saved and verified")
+	f.IntVar(&opts.batch, "batch", defaultBatch, "save (and, with --delete, delete verified files) after this many uploads")
 	return cmd
 }
 
@@ -81,6 +82,7 @@ type uploadOptions struct {
 	zipPath     string
 	withML      bool
 	deleteLocal bool
+	batch       int
 }
 
 // runUpload authenticates, unlocks the vault, collects the items and runs the
@@ -121,13 +123,17 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	uploader := gallery.NewUploader(client, store, vk, opts.withML)
 	fmt.Fprintf(out, "Uploading %d item(s)%s…\n", len(items), mlNote(opts.withML))
 
+	batch := opts.batch
+	if batch < 1 {
+		batch = defaultBatch
+	}
 	run := &uploadRun{out: out, opts: opts, ctx: ctx, store: store, uploader: uploader}
 	for i, item := range items {
 		if ctx.Err() != nil {
 			break
 		}
 		run.one(i, len(items), item)
-		if run.sinceSave >= saveEvery {
+		if run.sinceSave >= batch {
 			if err := run.flush(); err != nil {
 				return err
 			}

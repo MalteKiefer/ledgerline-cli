@@ -238,6 +238,51 @@ two photos share a name), with its capture time set as the file's modification
 time. Files already present are skipped unless `--force` is given, so the command
 is resumable. Trashed photos are never downloaded.
 
+### `files`
+
+Work with the encrypted Files module. All commands need the vault passphrase.
+
+```sh
+ledgerline-cli files download -o /local/dir [--remote SubFolder] [--force]
+ledgerline-cli files upload   -f /local/dir [--remote Target] [--hidden]
+ledgerline-cli files sync     --map remote:local [--map …] [flags]
+```
+
+**`files sync`** is a two-way sync. It keeps a local sync-state database (in the
+config dir) so it can tell which side changed since the last run.
+
+- **Mappings.** Repeatable `--map remote:local` maps a remote folder to a local
+  directory (e.g. `--map Photos:/home/me/photos --map Docs:/home/me/docs`). A
+  value with no colon maps the **whole store into one folder**
+  (`--map /home/me/ledger`). With no `--map`, the `sync` list from the settings
+  file is used.
+- **Deletions** — `--delete both` (default, propagate both ways) | `additive`
+  (never delete, recreate the missing side) | `to-remote` (local deletes trash
+  remote; remote never deletes local).
+- **Conflicts** (same file changed on both sides) — `--conflict keep-both`
+  (default; the remote copy is saved as `name (conflict …).ext` on both sides) |
+  `newest` | `skip`.
+- `--hidden` includes dotfiles; `--ignore PATTERN` (repeatable) and the settings
+  file's `ignore` list exclude paths (gitignore-style); `--dry-run` previews.
+
+> Two-way sync with deletion propagation can remove files. Start with
+> `--dry-run`, and consider `--delete additive` until you trust a mapping.
+
+### Settings
+
+`settings.json` in the config dir is user-editable and read by `files sync`:
+
+```json
+{
+  "hidden": false,
+  "ignore": ["*.tmp", "node_modules/", ".git/"],
+  "sync": [
+    { "remote": "Photos", "local": "/home/me/photos" },
+    { "remote": "", "local": "/home/me/ledger-all" }
+  ]
+}
+```
+
 ## How authentication works
 
 The CLI reuses the same server mechanism as the Ledgerline mobile app. The app
