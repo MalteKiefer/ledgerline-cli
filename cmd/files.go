@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
 )
 
@@ -34,27 +36,35 @@ func newFilesDownloadCommand() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "download",
-		Short: "Download and decrypt files to a local folder",
-		Long: "Download files, preserving the folder tree, into an output folder.\n\n" +
-			"  ledgerline-cli files download -o /local/dir [--remote SubFolder]\n\n" +
-			"Files already present with the same size are skipped unless --force.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Use:   "download [path]",
+		Short: "Download and decrypt a file or folder to a local folder",
+		Long: "Download by path — a single file, a folder subtree, or the whole store.\n\n" +
+			"  ledgerline-cli files download -o /local/dir                 # everything\n" +
+			"  ledgerline-cli files download Photos/2024 -o /local/dir     # a folder subtree\n" +
+			"  ledgerline-cli files download Docs/report.pdf -o /local/dir # a single file\n\n" +
+			"The path is auto-detected as a file or a folder. Files already present with\n" +
+			"the same size are skipped unless --force.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if out == "" {
 				return errors.New("an output folder is required: -o/--output")
 			}
-			return runFilesDownload(cmd, out, remote, force)
+			path := remote
+			if len(args) == 1 {
+				path = args[0]
+			}
+			return runFilesDownload(cmd, out, path, force)
 		},
 	}
 	cmd.Flags().StringVarP(&out, "output", "o", "", "destination folder (required)")
-	cmd.Flags().StringVar(&remote, "remote", "", "restrict to a remote subfolder path")
+	cmd.Flags().StringVar(&remote, "remote", "", "remote file or folder path (alternative to the positional argument)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing local files")
 	return cmd
 }
 
 // runFilesDownload loads the manifest and writes each file's decrypted content.
-func runFilesDownload(cmd *cobra.Command, outDir, remote string, force bool) error {
+// The path may name a single file, a folder subtree, or (empty) the whole store.
+func runFilesDownload(cmd *cobra.Command, outDir, path string, force bool) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
 
@@ -72,7 +82,16 @@ func runFilesDownload(cmd *cobra.Command, outDir, remote string, force bool) err
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
-	entries := files.List(store, remote)
+
+	// A path that names a single file downloads just that file.
+	if fv, ok := files.FindFile(store, path); ok {
+		return downloadSingleFile(ctx, w, client, vk, outDir, fv, force)
+	}
+	if path != "" && !files.IsFolder(store, path) {
+		return fmt.Errorf("no such file or folder: %s", path)
+	}
+
+	entries := files.List(store, path)
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No files to download.")
 		return nil
@@ -109,6 +128,29 @@ func runFilesDownload(cmd *cobra.Command, outDir, remote string, force bool) err
 		fmt.Fprintf(w, "  [%d/%d] %s — downloaded\n", i+1, len(entries), e.Path)
 	}
 	fmt.Fprintf(w, "Done: %d downloaded, %d skipped, %d failed.\n", got, skipped, failed)
+	return nil
+}
+
+// downloadSingleFile fetches one file into outDir (as its own name).
+func downloadSingleFile(ctx context.Context, w io.Writer, client *api.Client, vk []byte, outDir string, fv files.FileView, force bool) error {
+	dest := filepath.Join(outDir, fv.Name)
+	if !force {
+		if info, err := os.Stat(dest); err == nil && info.Size() == fv.Size {
+			fmt.Fprintf(w, "%s — exists, skipped\n", fv.Name)
+			return nil
+		}
+	}
+	data, err := files.NewDownloader(client, vk).Fetch(ctx, fv)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	if err := writeAtomic(dest, data); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "%s — downloaded\n", fv.Name)
 	return nil
 }
 

@@ -223,6 +223,8 @@ func TestChildrenListing(t *testing.T) {
 		"files": []map[string]any{
 			{"id": "a", "name": "root.txt", "blob": "b1", "encFileKey": "{}", "size": 10, "folder": nil},
 			{"id": "b", "name": "inside.txt", "blob": "b2", "encFileKey": "{}", "size": 20, "folder": "f1"},
+			// A file whose parent folder no longer exists must show at the root.
+			{"id": "c", "name": "orphan.txt", "blob": "b3", "encFileKey": "{}", "size": 30, "folder": "ghost"},
 		},
 	})
 
@@ -238,8 +240,15 @@ func TestChildrenListing(t *testing.T) {
 	if len(folders) != 1 || folders[0].Name != "docs" {
 		t.Fatalf("root folders = %+v", folders)
 	}
-	if len(filesList) != 1 || filesList[0].Name != "root.txt" {
-		t.Fatalf("root files = %+v", filesList)
+	if len(filesList) != 2 {
+		t.Fatalf("want 2 root files (root.txt + orphan.txt), got %+v", filesList)
+	}
+
+	if _, ok := FindFile(store, "docs/inside.txt"); !ok {
+		t.Fatal("FindFile should resolve a nested file path")
+	}
+	if _, ok := FindFile(store, "docs"); ok {
+		t.Fatal("FindFile must not resolve a folder path")
 	}
 
 	folders, filesList, err = Children(store, "docs")
