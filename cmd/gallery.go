@@ -175,6 +175,11 @@ func (r *uploadRun) one(idx, total int, item gallery.Item) {
 
 	outcome, rec, uerr := r.uploader.Upload(r.ctx, item, plain)
 	switch {
+	case uerr != nil && (errors.Is(uerr, context.Canceled) || r.ctx.Err() != nil):
+		// Interrupted (Ctrl-C): not a real failure. Staged progress is still
+		// saved on the way out, and a re-run skips what already uploaded.
+		fmt.Fprintf(w, "  [%d/%d] %s — interrupted\n", idx+1, total, label)
+		return
 	case uerr != nil:
 		r.failed++
 		fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", idx+1, total, label, uerr)
