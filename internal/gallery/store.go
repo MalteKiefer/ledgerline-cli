@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
@@ -109,9 +110,9 @@ func (s *Store) Load(ctx context.Context) error {
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
 	var photos []json.RawMessage
 	for i, sh := range shards {
-		blob, err := s.client.GetGalleryBlob(ctx, sh.Ref)
+		blob, err := s.fetchShardWithRetry(ctx, sh.Ref)
 		if err != nil {
-			return nil, fmt.Errorf("fetch shard %d/%d: %w", i+1, len(shards), err)
+			return nil, fmt.Errorf("fetch shard %d/%d (%s): %w", i+1, len(shards), sh.Ref, err)
 		}
 		plain, err := crypto.DecryptContent(blob, sh.Key, s.vk)
 		if err != nil {
@@ -124,6 +125,31 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 		photos = append(photos, arr...)
 	}
 	return photos, nil
+}
+
+// fetchShardWithRetry fetches a shard blob, retrying a few times on a transient
+// failure (a 404 can briefly follow a fresh object-storage write, and 5xx/429
+// are transient). It never deletes or overwrites anything.
+func (s *Store) fetchShardWithRetry(ctx context.Context, ref string) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
+		}
+		blob, err := s.client.GetGalleryBlob(ctx, ref)
+		if err == nil {
+			return blob, nil
+		}
+		lastErr = err
+		if code := api.Status(err); code != 0 && code != 404 && code != 429 && code < 500 {
+			break // a definitive client error won't fix itself
+		}
+	}
+	return nil, lastErr
 }
 
 // indexSigs records the exact-file signatures already present so duplicates are
