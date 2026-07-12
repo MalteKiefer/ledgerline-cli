@@ -167,6 +167,20 @@ $ ledgerline-cli auth logout
 Logged out.
 ```
 
+### `auth unlock` / `auth lock`
+
+Cache the vault key so `gallery`, `files` and `todo` don't prompt for the
+passphrase each time:
+
+```sh
+ledgerline-cli auth unlock --remember 24h   # also: 12h, 7d, 4w
+ledgerline-cli auth lock                    # clear the cached key
+```
+
+The key is stored in the OS keychain (or a `0600` file, with a warning, when no
+keychain is available). Logout and a server-side device revoke clear it; any
+revoked/expired token wipes the local credential and cached key on the next call.
+
 ### `gallery upload`
 
 Upload photos and videos to the gallery. Everything is **encrypted on your

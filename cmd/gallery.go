@@ -279,15 +279,28 @@ func authedClient(ctx context.Context) (*api.Client, error) {
 	}
 	if _, _, err := client.Me(ctx); err != nil {
 		if api.Status(err) == 401 {
-			return nil, errors.New("session expired; run 'ledgerline-cli auth login' again")
+			// The device was revoked from the web or the token expired. Wipe the
+			// local credential AND any cached vault key so nothing stale lingers.
+			_ = session.Clear()
+			return nil, errors.New("this device was revoked or the session expired; local credential and cached key cleared — run 'ledgerline-cli auth login'")
 		}
 		return nil, err
 	}
 	return client, nil
 }
 
-// unlockVault prompts for the passphrase (never echoed) and derives the vault key.
+// unlockVault yields the vault key: it uses a valid cached key (no prompt) if one
+// exists, otherwise prompts for the passphrase.
 func unlockVault(cmd *cobra.Command, client *api.Client) ([]byte, error) {
+	if vk, _, err := session.LoadVaultKey(); err == nil {
+		return vk, nil
+	}
+	return unlockVaultPrompt(cmd, client)
+}
+
+// unlockVaultPrompt always prompts for the passphrase (never echoed) and derives
+// the vault key, ignoring any cache.
+func unlockVaultPrompt(cmd *cobra.Command, client *api.Client) ([]byte, error) {
 	out := cmd.OutOrStdout()
 	fmt.Fprint(out, "Vault passphrase: ")
 	pass, err := readPassword(cmd.InOrStdin())

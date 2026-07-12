@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,8 +34,93 @@ func newAuthCommand() *cobra.Command {
 			"from the web profile for a durable token; `auth status` shows who you are;\n" +
 			"`auth logout` revokes and removes it.",
 	}
-	cmd.AddCommand(newAuthLoginCommand(), newAuthLogoutCommand(), newAuthStatusCommand())
+	cmd.AddCommand(newAuthLoginCommand(), newAuthLogoutCommand(), newAuthStatusCommand(),
+		newAuthUnlockCommand(), newAuthLockCommand())
 	return cmd
+}
+
+// newAuthUnlockCommand caches the vault key so decrypting commands skip the
+// passphrase prompt for a window.
+func newAuthUnlockCommand() *cobra.Command {
+	var remember string
+	cmd := &cobra.Command{
+		Use:   "unlock",
+		Short: "Cache the vault key so decrypting commands don't re-prompt",
+		Long: "Prompt for the vault passphrase once and cache the derived key for a\n" +
+			"window (default 24h) so gallery/files/todo commands run without asking\n" +
+			"again. The key is kept in the OS keychain (or a 0600 file when no keychain\n" +
+			"is available — plaintext at rest). 'auth lock' clears it; so do logout and\n" +
+			"a server-side device revoke.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			dur, err := parseRemember(remember)
+			if err != nil {
+				return err
+			}
+			client, err := authedClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			vk, err := unlockVaultPrompt(cmd, client)
+			if err != nil {
+				return err
+			}
+			expires := time.Now().Add(dur)
+			if err := session.SaveVaultKey(vk, expires); err != nil {
+				return fmt.Errorf("cache vault key: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			sess, _ := session.Load()
+			fmt.Fprintf(out, "Vault unlocked. Key cached until %s, in the %s.\n",
+				expires.Format("2006-01-02 15:04"), backendLabel(sess.Backend))
+			if sess.Backend == session.BackendFile {
+				fmt.Fprintln(out, "Warning: no OS keychain available — the vault key is stored as plaintext in the config file.")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&remember, "remember", "24h", "how long to cache the key (e.g. 12h, 24h, 7d, 4w)")
+	return cmd
+}
+
+// newAuthLockCommand clears any cached vault key.
+func newAuthLockCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "lock",
+		Short: "Clear the cached vault key (keeps you logged in)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := session.ClearVaultKey(); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "Vault key cleared.")
+			return nil
+		},
+	}
+}
+
+// parseRemember parses a cache window: a Go duration, or Nd / Nw for days/weeks.
+func parseRemember(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 24 * time.Hour, nil
+	}
+	if len(s) > 1 && (s[len(s)-1] == 'd' || s[len(s)-1] == 'w') {
+		n, err := strconv.Atoi(s[:len(s)-1])
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		unit := 24 * time.Hour
+		if s[len(s)-1] == 'w' {
+			unit = 7 * 24 * time.Hour
+		}
+		return time.Duration(n) * unit, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q (try 12h, 24h, 7d, 4w)", s)
+	}
+	return d, nil
 }
 
 // newAuthLoginCommand implements the copy/paste pairing flow.
@@ -225,8 +312,10 @@ func newAuthStatusCommand() *cobra.Command {
 			user, usage, err := client.Me(ctx)
 			if err != nil {
 				if api.Status(err) == 401 {
+					// Revoked from the web or expired — clear local state cleanly.
+					_ = session.Clear()
 					fmt.Fprintln(out, "Stored credential is no longer valid (revoked or expired).")
-					fmt.Fprintln(out, "Run 'ledgerline-cli auth login' to re-authenticate.")
+					fmt.Fprintln(out, "Local credential and cached key cleared. Run 'ledgerline-cli auth login'.")
 					return nil
 				}
 				return err
@@ -236,6 +325,11 @@ func newAuthStatusCommand() *cobra.Command {
 			fmt.Fprintf(out, "Server:  %s\n", sess.ServerURL)
 			fmt.Fprintf(out, "Token:   stored in the %s\n", backendLabel(sess.Backend))
 			fmt.Fprintf(out, "Usage:   %s in files, %s in gallery\n", humanBytes(usage.Files), humanBytes(usage.Gallery))
+			if vk, expiry, verr := session.LoadVaultKey(); verr == nil && len(vk) > 0 {
+				fmt.Fprintf(out, "Vault:   unlocked (key cached until %s)\n", expiry.Format("2006-01-02 15:04"))
+			} else {
+				fmt.Fprintln(out, "Vault:   locked (passphrase required; run 'auth unlock' to cache)")
+			}
 			return nil
 		},
 	}

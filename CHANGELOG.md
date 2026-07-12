@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs `--recursive`.
 - `files open <path>` — decrypt a file to a private temp copy and open it with
   the OS default app (`--wait` deletes the copy after the app closes).
+- `auth unlock` / `auth lock` — cache the unlocked vault key (default 24h, e.g.
+  `--remember 7d`) so gallery/files/todo run without re-entering the passphrase;
+  the key lives in the OS keychain (or a 0600 file with a warning). A logout or a
+  server-side device revoke clears it, and any 401 wipes the local credential and
+  cached key cleanly. `auth status` shows the vault lock state.
 - User-editable settings file (`settings.json` in the config dir): `ignore`
   patterns, sync `sync` mappings, and a `hidden` default.
 - `gallery upload --batch N` — flush (save, and with `--delete` remove verified
