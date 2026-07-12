@@ -225,6 +225,9 @@ func TestChildrenListing(t *testing.T) {
 			{"id": "b", "name": "inside.txt", "blob": "b2", "encFileKey": "{}", "size": 20, "folder": "f1"},
 			// A file whose parent folder no longer exists must show at the root.
 			{"id": "c", "name": "orphan.txt", "blob": "b3", "encFileKey": "{}", "size": 30, "folder": "ghost"},
+			// Odd field types must not drop the record: encFileKey as an object,
+			// size as a float, trashed as a bool.
+			{"id": "d", "name": "weird.pdf", "blob": "b4", "encFileKey": map[string]any{"c": "x", "n": "y"}, "size": 12.0, "trashed": false, "folder": nil},
 		},
 	})
 
@@ -240,8 +243,8 @@ func TestChildrenListing(t *testing.T) {
 	if len(folders) != 1 || folders[0].Name != "docs" {
 		t.Fatalf("root folders = %+v", folders)
 	}
-	if len(filesList) != 2 {
-		t.Fatalf("want 2 root files (root.txt + orphan.txt), got %+v", filesList)
+	if len(filesList) != 3 {
+		t.Fatalf("want 3 root files (root.txt + orphan.txt + weird.pdf), got %+v", filesList)
 	}
 
 	if _, ok := FindFile(store, "docs/inside.txt"); !ok {

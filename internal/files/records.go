@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // FileView is a typed read-only view of a file record's fields the client uses.
@@ -34,37 +35,76 @@ type FolderView struct {
 	Trashed string
 }
 
-// parseFile reads the modelled fields from a raw file record.
+// parseFile reads the modelled fields from a raw file record. It is tolerant of
+// field-type variance in the manifest (size as int or float, trashed as string,
+// bool or null) so a single odd field never drops a whole record.
 func parseFile(raw json.RawMessage) (FileView, error) {
 	var r struct {
-		ID         string  `json:"id"`
-		Blob       string  `json:"blob"`
-		EncFileKey string  `json:"encFileKey"`
-		Name       string  `json:"name"`
-		Mime       string  `json:"mime"`
-		Size       int64   `json:"size"`
-		Folder     *string `json:"folder"`
-		Created    string  `json:"created"`
-		Trashed    string  `json:"trashed"`
+		ID         string          `json:"id"`
+		Blob       string          `json:"blob"`
+		EncFileKey json.RawMessage `json:"encFileKey"`
+		Name       string          `json:"name"`
+		Mime       string          `json:"mime"`
+		Size       json.Number     `json:"size"`
+		Folder     *string         `json:"folder"`
+		Created    string          `json:"created"`
+		Trashed    json.RawMessage `json:"trashed"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return FileView{}, err
 	}
-	return FileView(r), nil
+	size, _ := r.Size.Int64()
+	return FileView{
+		ID: r.ID, Blob: r.Blob, EncFileKey: normalizeSealed(r.EncFileKey), Name: r.Name, Mime: r.Mime,
+		Size: size, Folder: r.Folder, Created: r.Created, Trashed: interpretTrashed(r.Trashed),
+	}, nil
 }
 
-// parseFolder reads the modelled fields from a raw folder record.
+// normalizeSealed returns the {"c","n"} JSON string for a file's wrapped key,
+// accepting either a JSON string (the web stores JSON.stringify({c,n})) or a bare
+// object. The result is what crypto.DecryptContent expects.
+func normalizeSealed(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	if s[0] == '"' {
+		var inner string
+		if err := json.Unmarshal(raw, &inner); err == nil {
+			return inner
+		}
+	}
+	return s
+}
+
+// parseFolder reads the modelled fields from a raw folder record (tolerant of a
+// bool/null/string trashed field).
 func parseFolder(raw json.RawMessage) (FolderView, error) {
 	var r struct {
-		ID      string  `json:"id"`
-		Name    string  `json:"name"`
-		Parent  *string `json:"parent"`
-		Trashed string  `json:"trashed"`
+		ID      string          `json:"id"`
+		Name    string          `json:"name"`
+		Parent  *string         `json:"parent"`
+		Trashed json.RawMessage `json:"trashed"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return FolderView{}, err
 	}
-	return FolderView(r), nil
+	return FolderView{ID: r.ID, Name: r.Name, Parent: r.Parent, Trashed: interpretTrashed(r.Trashed)}, nil
+}
+
+// interpretTrashed reduces a trashed field (which may be null, false, "" or an
+// ISO timestamp string) to a marker string: empty means "not trashed".
+func interpretTrashed(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	switch s {
+	case "", "null", "false", `""`, "0":
+		return ""
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		return str // an ISO timestamp (or any non-empty string)
+	}
+	return "trashed" // truthy non-string (e.g. bool true)
 }
 
 // recordID extracts the id from any raw record.
