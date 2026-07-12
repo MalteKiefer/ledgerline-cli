@@ -106,6 +106,39 @@ func (s *Store) DeleteFile(id string) {
 // TrashFile stages a soft-delete (sets the trashed timestamp).
 func (s *Store) TrashFile(id, whenISO string) { s.UpdateFile(id, map[string]any{"trashed": whenISO}) }
 
+// DeleteFolder stages permanent removal of a folder record.
+func (s *Store) DeleteFolder(id string) {
+	s.ops = append(s.ops, op{kind: opDeleteFolder, id: id})
+}
+
+// FileBlobs returns every content blob a file references — its current blob plus
+// all version-history blobs — so a permanent delete can reclaim them.
+func (s *Store) FileBlobs(id string) []string {
+	raw, ok := s.fileRawByID()[id]
+	if !ok {
+		return nil
+	}
+	var r struct {
+		Blob     string `json:"blob"`
+		Versions []struct {
+			Blob string `json:"blob"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil
+	}
+	var out []string
+	if r.Blob != "" {
+		out = append(out, r.Blob)
+	}
+	for _, v := range r.Versions {
+		if v.Blob != "" {
+			out = append(out, v.Blob)
+		}
+	}
+	return out
+}
+
 // Dirty reports whether there are unsaved changes.
 func (s *Store) Dirty() bool { return len(s.ops) > 0 }
 

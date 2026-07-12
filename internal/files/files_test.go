@@ -270,6 +270,59 @@ func TestChildrenListing(t *testing.T) {
 	}
 }
 
+func TestSubtreeAndForceDelete(t *testing.T) {
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+
+	m.seedManifest(t, map[string]any{
+		"v": 1,
+		"fileFolders": []map[string]any{
+			{"id": "f1", "name": "docs", "parent": nil},
+			{"id": "f2", "name": "sub", "parent": "f1"},
+		},
+		"files": []map[string]any{
+			{"id": "a", "name": "a.txt", "blob": "b1", "encFileKey": "{}", "size": 1, "folder": "f1"},
+			{"id": "b", "name": "b.txt", "blob": "b2", "encFileKey": "{}", "size": 1, "folder": "f2"},
+			{"id": "r", "name": "root.txt", "blob": "b3", "encFileKey": "{}", "size": 1, "folder": nil},
+		},
+	})
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	subFiles, folderIDs, err := Subtree(store, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subFiles) != 2 || len(folderIDs) != 2 {
+		t.Fatalf("Subtree(docs) = %d files, %d folders (want 2, 2)", len(subFiles), len(folderIDs))
+	}
+
+	for _, fv := range subFiles {
+		store.DeleteFile(fv.ID)
+	}
+	for _, id := range folderIDs {
+		store.DeleteFolder(id)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := NewStore(client, vk)
+	fresh.Load(ctx)
+	folders, filesList, _ := Children(fresh, "")
+	if len(folders) != 0 {
+		t.Fatalf("folders not deleted: %+v", folders)
+	}
+	if len(filesList) != 1 || filesList[0].Name != "root.txt" {
+		t.Fatalf("subtree files not deleted (root.txt should remain): %+v", filesList)
+	}
+}
+
 func TestSyncRoundTripAndDelete(t *testing.T) {
 	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir()) // isolate sync-state
 	m := newMock(t, "pw")

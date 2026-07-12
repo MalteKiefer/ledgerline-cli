@@ -6,6 +6,49 @@ import (
 	"strings"
 )
 
+// Subtree returns every non-trashed file at or under a folder path, plus the ids
+// of that folder and all its descendant folders. The path must be a folder.
+func Subtree(store *Store, path string) (files []FileView, folderIDs []string, err error) {
+	tree := NewTree(store)
+	rootID, ok := tree.FindFolder(path)
+	if !ok {
+		return nil, nil, fmt.Errorf("no such folder: %s", path)
+	}
+
+	// Collect the folder and all descendants via child links.
+	inSet := map[string]bool{} // folder ids inside the subtree
+	if rootID != nil {
+		inSet[*rootID] = true
+		folderIDs = append(folderIDs, *rootID)
+	}
+	changed := true
+	for changed {
+		changed = false
+		for _, raw := range store.Folders() {
+			fv, perr := parseFolder(raw)
+			if perr != nil || fv.ID == "" || inSet[fv.ID] {
+				continue
+			}
+			if fv.Parent != nil && inSet[*fv.Parent] {
+				inSet[fv.ID] = true
+				folderIDs = append(folderIDs, fv.ID)
+				changed = true
+			}
+		}
+	}
+
+	for _, raw := range store.Files() {
+		fv, perr := parseFile(raw)
+		if perr != nil || fv.Trashed != "" || fv.ID == "" {
+			continue
+		}
+		if (fv.Folder == nil && rootID == nil) || (fv.Folder != nil && inSet[*fv.Folder]) {
+			files = append(files, fv)
+		}
+	}
+	return files, folderIDs, nil
+}
+
 // FindFile resolves a slash path to a single non-trashed file, if one exists at
 // exactly that path.
 func FindFile(store *Store, path string) (FileView, bool) {

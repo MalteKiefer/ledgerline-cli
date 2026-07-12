@@ -246,8 +246,13 @@ Work with the encrypted Files module. All commands need the vault passphrase.
 ledgerline-cli files ls       [path] [-R]        # list folders/files (colour + icons)
 ledgerline-cli files download -o /local/dir [--remote SubFolder] [--force]
 ledgerline-cli files upload   -f /local/dir [--remote Target] [--hidden]
+ledgerline-cli files open     <path>             # open with the OS default app
+ledgerline-cli files rm       <path> [-r] [-f]   # trash, or --force to erase
 ledgerline-cli files sync     --map remote:local [--map …] [flags]
 ```
+
+`files rm` trashes by default (restore in the web app); `--force` deletes
+permanently and reclaims blobs, and a folder needs `--recursive`.
 
 `files ls` shows a folder's contents colour-coded with a monochrome per-type icon
 (Nerd Font glyphs; use `--icons none` if your terminal font lacks them, and

@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `done`/`undone`, `mark`/`unmark`, `edit`, `rm` (`--force` to delete),
   `restore`, and `lists` (`add`/`rm`/`rename`). Todos are referenced by a short
   id prefix.
+- `files rm <path>` — delete a file or folder: trash by default (restorable in
+  the web app) or `--force` to erase permanently and reclaim blobs; a folder
+  needs `--recursive`.
 - `files open <path>` — decrypt a file to a private temp copy and open it with
   the OS default app (`--wait` deletes the copy after the app closes).
 - User-editable settings file (`settings.json` in the config dir): `ignore`
