@@ -243,10 +243,15 @@ is resumable. Trashed photos are never downloaded.
 Work with the encrypted Files module. All commands need the vault passphrase.
 
 ```sh
+ledgerline-cli files ls       [path] [-R]        # list folders/files (colour + icons)
 ledgerline-cli files download -o /local/dir [--remote SubFolder] [--force]
 ledgerline-cli files upload   -f /local/dir [--remote Target] [--hidden]
 ledgerline-cli files sync     --map remote:local [--map …] [flags]
 ```
+
+`files ls` shows a folder's contents colour-coded with a monochrome per-type icon
+(Nerd Font glyphs; use `--icons none` if your terminal font lacks them, and
+`--color never` to disable colour).
 
 **`files sync`** is a two-way sync. It keeps a local sync-state database (in the
 config dir) so it can tell which side changed since the last run.

@@ -208,6 +208,56 @@ func TestManifestPreservesOtherModules(t *testing.T) {
 	}
 }
 
+func TestChildrenListing(t *testing.T) {
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+
+	m.seedManifest(t, map[string]any{
+		"v": 1,
+		"fileFolders": []map[string]any{
+			{"id": "f1", "name": "docs", "parent": nil},
+			{"id": "f2", "name": "sub", "parent": "f1"},
+		},
+		"files": []map[string]any{
+			{"id": "a", "name": "root.txt", "blob": "b1", "encFileKey": "{}", "size": 10, "folder": nil},
+			{"id": "b", "name": "inside.txt", "blob": "b2", "encFileKey": "{}", "size": 20, "folder": "f1"},
+		},
+	})
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	folders, filesList, err := Children(store, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].Name != "docs" {
+		t.Fatalf("root folders = %+v", folders)
+	}
+	if len(filesList) != 1 || filesList[0].Name != "root.txt" {
+		t.Fatalf("root files = %+v", filesList)
+	}
+
+	folders, filesList, err = Children(store, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].Name != "sub" {
+		t.Fatalf("docs folders = %+v", folders)
+	}
+	if len(filesList) != 1 || filesList[0].Name != "inside.txt" {
+		t.Fatalf("docs files = %+v", filesList)
+	}
+
+	if _, _, err := Children(store, "nope"); err == nil {
+		t.Fatal("expected error for unknown folder")
+	}
+}
+
 func TestSyncRoundTripAndDelete(t *testing.T) {
 	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir()) // isolate sync-state
 	m := newMock(t, "pw")

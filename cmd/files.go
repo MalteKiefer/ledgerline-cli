@@ -24,7 +24,7 @@ func newFilesCommand() *cobra.Command {
 		Use:   "files",
 		Short: "Work with encrypted files",
 	}
-	cmd.AddCommand(newFilesDownloadCommand(), newFilesUploadCommand(), newFilesSyncCommand())
+	cmd.AddCommand(newFilesLsCommand(), newFilesDownloadCommand(), newFilesUploadCommand(), newFilesSyncCommand())
 	return cmd
 }
 

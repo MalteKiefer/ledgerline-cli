@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `files` command group — a full sync client for the zero-knowledge Files module
   (which lives in the shared workspace manifest; other modules like notes and
   bookmarks are always preserved verbatim).
+  - `files ls [path]` — list a folder's subfolders and files (colour-coded with a
+    monochrome per-type Nerd Font icon), `-R` to recurse; `--color` and `--icons`
+    control styling.
   - `files upload` — upload a local folder tree, recreating subfolders; a changed
     file adds a version, an unchanged one is skipped. `--hidden` includes dotfiles.
   - `files download` — decrypt files to a local folder, preserving the tree;
