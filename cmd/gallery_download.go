@@ -67,7 +67,7 @@ func runDownload(cmd *cobra.Command, opts downloadOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(opts.outDir, 0o755); err != nil {
+	if err := os.MkdirAll(opts.outDir, 0o700); err != nil {
 		return err
 	}
 
@@ -141,7 +141,7 @@ func downloadOne(ctx context.Context, client *api.Client, vk []byte, t gallery.T
 // into place, so an interrupted download never leaves a truncated file.
 func writeAtomic(path string, data []byte) error {
 	tmp := path + ".part"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {

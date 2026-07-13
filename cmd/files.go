@@ -103,7 +103,12 @@ func runFilesDownload(cmd *cobra.Command, outDir, path string, force bool) error
 		if ctx.Err() != nil {
 			break
 		}
-		dest := filepath.Join(outDir, filepath.FromSlash(e.Path))
+		dest, ok := files.SafeJoin(outDir, e.Path)
+		if !ok {
+			failed++
+			fmt.Fprintf(w, "  [%d/%d] %s — skipped: unsafe path\n", i+1, len(entries), e.Path)
+			continue
+		}
 		if !force {
 			if info, serr := os.Stat(dest); serr == nil && info.Size() == e.View.Size {
 				skipped++
@@ -116,7 +121,7 @@ func runFilesDownload(cmd *cobra.Command, outDir, path string, force bool) error
 			fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(entries), e.Path, ferr)
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 			return err
 		}
 		if err := writeAtomic(dest, data); err != nil {
@@ -133,7 +138,10 @@ func runFilesDownload(cmd *cobra.Command, outDir, path string, force bool) error
 
 // downloadSingleFile fetches one file into outDir (as its own name).
 func downloadSingleFile(ctx context.Context, w io.Writer, client *api.Client, vk []byte, outDir string, fv files.FileView, force bool) error {
-	dest := filepath.Join(outDir, fv.Name)
+	dest, ok := files.SafeJoin(outDir, fv.Name)
+	if !ok {
+		return fmt.Errorf("refusing unsafe file name %q", fv.Name)
+	}
 	if !force {
 		if info, err := os.Stat(dest); err == nil && info.Size() == fv.Size {
 			fmt.Fprintf(w, "%s — exists, skipped\n", fv.Name)
@@ -144,7 +152,7 @@ func downloadSingleFile(ctx context.Context, w io.Writer, client *api.Client, vk
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		return err
 	}
 	if err := writeAtomic(dest, data); err != nil {

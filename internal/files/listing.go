@@ -2,9 +2,24 @@ package files
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// SafeJoin joins a local base directory with a manifest-derived slash path and
+// returns ok=false if the result would escape base (via ".." or an absolute
+// component). The Files store is zero-knowledge over an untrusted server, so a
+// hostile record name like "../../.ssh/authorized_keys" must never write outside
+// the target directory.
+func SafeJoin(base, rel string) (string, bool) {
+	p := filepath.Join(base, filepath.FromSlash(rel))
+	r, err := filepath.Rel(base, p)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return p, true
+}
 
 // Subtree returns every non-trashed file at or under a folder path, plus the ids
 // of that folder and all its descendant folders. The path must be a folder.

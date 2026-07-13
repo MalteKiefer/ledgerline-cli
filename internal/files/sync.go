@@ -247,7 +247,11 @@ func (s *Syncer) pull(ctx context.Context, rel, dest string, r Entry, res *SyncR
 }
 
 func (s *Syncer) download(ctx context.Context, rel string, r Entry, res *SyncResult) (fileState, bool) {
-	return s.pull(ctx, rel, filepath.Join(s.localDir, filepath.FromSlash(rel)), r, res)
+	dest, ok := SafeJoin(s.localDir, rel)
+	if !ok {
+		return s.fail(rel, fmt.Errorf("unsafe remote path, refusing to write outside %s", s.localDir), res)
+	}
+	return s.pull(ctx, rel, dest, r, res)
 }
 
 func (s *Syncer) trashRemote(rel, id string, res *SyncResult) (fileState, bool) {
@@ -301,8 +305,8 @@ func (s *Syncer) conflict(ctx context.Context, rel string, l *localEntry, r Entr
 		conflictRel := conflictName(rel)
 		if !s.opts.DryRun {
 			data, err := s.dl.Fetch(ctx, r.View)
-			if err == nil {
-				if _, werr := writeLocalFile(filepath.Join(s.localDir, filepath.FromSlash(conflictRel)), data); werr == nil {
+			if dest, ok := SafeJoin(s.localDir, conflictRel); err == nil && ok {
+				if _, werr := writeLocalFile(dest, data); werr == nil {
 					_, _, _ = s.up.Create(ctx, s.remotePath(conflictRel), mimeOf(conflictRel), nowISOFiles(), data)
 				}
 			}
@@ -416,11 +420,11 @@ func conflictName(rel string) string {
 
 // writeLocalFile writes data atomically and returns the resulting mod time.
 func writeLocalFile(dest string, data []byte) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return 0, err
 	}
 	tmp := dest + ".part"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return 0, err
 	}
 	if err := os.Rename(tmp, dest); err != nil {

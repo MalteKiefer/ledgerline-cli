@@ -87,6 +87,10 @@ func vaultKeyringUser(serverURL string) string { return "vault:" + serverURL }
 // ErrNoVaultKey means no valid cached vault key is available (absent or expired).
 var ErrNoVaultKey = errors.New("no cached vault key")
 
+// ErrNoKeychainForVaultKey means the vault key cannot be cached because no OS
+// keychain is available (caching to a file would store the master key plaintext).
+var ErrNoKeychainForVaultKey = errors.New("cannot cache the vault key without an OS keychain")
+
 // Save persists s, writing the token to the OS keychain when possible and
 // otherwise to the 0600 config file. It records the backend actually used on the
 // returned session's Backend field (and on disk).
@@ -171,11 +175,11 @@ func Clear() error {
 
 	path := filepath.Join(dir, fileName)
 	if state, err := readState(path); err == nil {
-		if state.Backend != BackendFile {
-			// Best-effort: a missing keychain entry is fine.
-			_ = keyring.Delete(keyringService, keyringUser(state.ServerURL))
-			_ = keyring.Delete(keyringService, vaultKeyringUser(state.ServerURL))
-		}
+		// Best-effort: delete BOTH keychain entries regardless of the recorded
+		// backend, so a secret can never be orphaned if the backend field is
+		// stale or the session was migrated. A missing entry is not an error.
+		_ = keyring.Delete(keyringService, keyringUser(state.ServerURL))
+		_ = keyring.Delete(keyringService, vaultKeyringUser(state.ServerURL))
 	}
 
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -212,15 +216,17 @@ func SaveVaultKey(vk []byte, expires time.Time) error {
 		return err // not authenticated
 	}
 
-	state.VaultExpires = expires.Unix()
+	// Refuse to cache the vault master key without an OS keychain — writing it to
+	// the config file would be plaintext at rest, defeating the zero-knowledge
+	// guarantee for exactly the headless users who can't avoid it.
 	if state.Backend == BackendFile {
-		state.VaultKey = base64.StdEncoding.EncodeToString(vk)
-	} else {
-		if err := keyring.Set(keyringService, vaultKeyringUser(state.ServerURL), base64.StdEncoding.EncodeToString(vk)); err != nil {
-			return err
-		}
-		state.VaultKey = ""
+		return ErrNoKeychainForVaultKey
 	}
+	if err := keyring.Set(keyringService, vaultKeyringUser(state.ServerURL), base64.StdEncoding.EncodeToString(vk)); err != nil {
+		return err
+	}
+	state.VaultKey = ""
+	state.VaultExpires = expires.Unix()
 	return writeState(path, state)
 }
 

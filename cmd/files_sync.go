@@ -112,7 +112,9 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	}
 
 	if !fl.dryRun {
-		if reportSync(ctx, client, "syncing", "files sync") {
+		// Heartbeat carries only a generic module tag — never a folder name or
+		// counts, which would leak sealed-manifest structure to the server.
+		if reportSync(ctx, client, "syncing", "files") {
 			return wipedError()
 		}
 		defer reportSync(context.WithoutCancel(ctx), client, "idle", "")
@@ -121,9 +123,6 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	var total files.SyncResult
 	for _, m := range mappings {
 		fmt.Fprintf(w, "Sync %q ⇄ %s\n", displayRemote(m.Remote), m.Local)
-		if !fl.dryRun && reportSync(ctx, client, "syncing", "files sync "+displayRemote(m.Remote)) {
-			return wipedError()
-		}
 		syncer := files.NewSyncer(client, store, vk, m.Local, m.Remote, opts)
 		res, err := syncer.Run(ctx)
 		if err != nil {

@@ -270,6 +270,67 @@ func TestChildrenListing(t *testing.T) {
 	}
 }
 
+func TestSafeJoin(t *testing.T) {
+	base := "/out"
+	cases := []struct {
+		rel string
+		ok  bool
+	}{
+		{"docs/a.txt", true},
+		{"normal.txt", true},
+		{"../evil", false},
+		{"a/../../b", false},
+		{"../../etc/passwd", false},
+		{"..", false},
+	}
+	for _, c := range cases {
+		if _, ok := SafeJoin(base, c.rel); ok != c.ok {
+			t.Fatalf("SafeJoin(%q, %q) ok=%v, want %v", base, c.rel, ok, c.ok)
+		}
+	}
+}
+
+func TestDownloadRefusesTraversalName(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+
+	// A hostile manifest names a file so it would escape the sync target.
+	m.seedManifest(t, map[string]any{
+		"v":           1,
+		"fileFolders": []any{},
+		"files": []map[string]any{
+			{"id": "e", "name": "../../evil.txt", "blob": "b1", "encFileKey": "{}", "size": 3, "folder": nil},
+		},
+	})
+	// Put a real (decryptable) blob behind b1 so only the path guard can stop it.
+	blob, key, _ := crypto.EncryptContent([]byte("bad"), vk)
+	padded, _ := crypto.PadBlob(blob)
+	m.mu.Lock()
+	m.blobs["b1"] = padded
+	m.mu.Unlock()
+	_ = key // the manifest's encFileKey is "{}", so decrypt would fail anyway; the point is the path guard fires first
+
+	dir := t.TempDir()
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewSyncer(client, store, vk, dir, "", SyncOptions{Conflict: ConflictKeepBoth, Delete: DeleteBoth}).Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed == 0 {
+		t.Fatal("expected the traversal name to be refused (a failure), not written")
+	}
+	// Nothing must exist outside the sync dir.
+	if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(dir)), "evil.txt")); err == nil {
+		t.Fatal("traversal wrote a file outside the target directory")
+	}
+}
+
 func TestSubtreeAndForceDelete(t *testing.T) {
 	m := newMock(t, "pw")
 	client := m.client(t)

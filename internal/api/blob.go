@@ -62,8 +62,14 @@ func (c *Client) getBlob(ctx context.Context, path string) ([]byte, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, decodeError(resp)
 	}
-	return io.ReadAll(resp.Body)
+	// Bound the body so a hostile/broken server can't stream an unbounded blob
+	// and OOM the client. The cap sits above the largest legitimate media +
+	// Padmé padding; an over-long body is truncated and will fail to decrypt.
+	return io.ReadAll(io.LimitReader(resp.Body, maxBlobBytes))
 }
+
+// maxBlobBytes caps a single downloaded blob (encrypted, Padmé-padded).
+const maxBlobBytes = 4 << 30 // 4 GiB
 
 // deleteBlob removes a module blob (idempotent server-side).
 func (c *Client) deleteBlob(ctx context.Context, path string) error {

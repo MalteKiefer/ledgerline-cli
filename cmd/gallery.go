@@ -123,7 +123,7 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	uploader := gallery.NewUploader(client, store, vk, opts.withML)
 	fmt.Fprintf(out, "Uploading %d item(s)%s…\n", len(items), mlNote(opts.withML))
 
-	if reportSync(ctx, client, "syncing", "gallery upload") {
+	if reportSync(ctx, client, "syncing", "gallery") {
 		return wipedError()
 	}
 	defer reportSync(context.WithoutCancel(ctx), client, "idle", "")
@@ -142,7 +142,7 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 			if err := run.flush(); err != nil {
 				return err
 			}
-			if reportSync(ctx, client, "syncing", fmt.Sprintf("gallery upload %d/%d", i+1, len(items))) {
+			if reportSync(ctx, client, "syncing", "gallery") {
 				return wipedError()
 			}
 		}

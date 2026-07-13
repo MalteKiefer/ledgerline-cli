@@ -65,17 +65,18 @@ func newAuthUnlockCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			out := cmd.OutOrStdout()
 			expires := time.Now().Add(dur)
 			if err := session.SaveVaultKey(vk, expires); err != nil {
+				if errors.Is(err, session.ErrNoKeychainForVaultKey) {
+					fmt.Fprintln(out, "No OS keychain available — not caching the vault key (it would be plaintext on disk).")
+					fmt.Fprintln(out, "You'll be asked for the passphrase each time. This is the safe default on headless hosts.")
+					return nil
+				}
 				return fmt.Errorf("cache vault key: %w", err)
 			}
-			out := cmd.OutOrStdout()
-			sess, _ := session.Load()
-			fmt.Fprintf(out, "Vault unlocked. Key cached until %s, in the %s.\n",
-				expires.Format("2006-01-02 15:04"), backendLabel(sess.Backend))
-			if sess.Backend == session.BackendFile {
-				fmt.Fprintln(out, "Warning: no OS keychain available — the vault key is stored as plaintext in the config file.")
-			}
+			fmt.Fprintf(out, "Vault unlocked. Key cached until %s, in the OS keychain.\n",
+				expires.Format("2006-01-02 15:04"))
 			return nil
 		},
 	}
