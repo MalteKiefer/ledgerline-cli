@@ -140,12 +140,16 @@ func downloadOne(ctx context.Context, client *api.Client, vk []byte, t gallery.T
 // writeAtomic writes data to a temp file in the same directory and renames it
 // into place, so an interrupted download never leaves a truncated file.
 func writeAtomic(path string, data []byte) error {
+	// Never write decrypted content through an existing symlink at the target.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through a symlink: %s", path)
+	}
 	tmp := path + ".part"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

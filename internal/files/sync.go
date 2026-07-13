@@ -2,7 +2,7 @@ package files
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -418,8 +418,12 @@ func conflictName(rel string) string {
 	return stem + " (conflict " + time.Now().UTC().Format("2006-01-02 150405") + ")" + ext
 }
 
-// writeLocalFile writes data atomically and returns the resulting mod time.
+// writeLocalFile writes data atomically and returns the resulting mod time. It
+// refuses to write decrypted content through an existing symlink at the target.
 func writeLocalFile(dest string, data []byte) (int64, error) {
+	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return 0, fmt.Errorf("refusing to write through a symlink: %s", dest)
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return 0, err
 	}
@@ -428,7 +432,7 @@ func writeLocalFile(dest string, data []byte) (int64, error) {
 		return 0, err
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return 0, err
 	}
 	fi, err := os.Stat(dest)
@@ -460,7 +464,7 @@ func stateKey(localDir, remoteBase string) string {
 	if err != nil {
 		abs = localDir
 	}
-	sum := sha1.Sum([]byte(remoteBase + "\x00" + abs))
+	sum := sha256.Sum256([]byte(remoteBase + "\x00" + abs))
 	return hex.EncodeToString(sum[:])
 }
 
