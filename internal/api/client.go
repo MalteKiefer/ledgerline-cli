@@ -24,10 +24,11 @@ import (
 // their own longer timeouts.
 const DefaultTimeout = 30 * time.Second
 
-// Retry policy for rate-limited (429) and temporarily-unavailable (503)
-// responses. A parallel bulk upload is bursty and will periodically trip the
-// server's rate limit; the client backs off (honouring Retry-After) and retries
-// rather than failing the whole run.
+// Retry policy for rate-limited and temporarily-unavailable responses (429 plus
+// the 502/503/504 gateway statuses) and transient transport failures. A parallel
+// bulk upload is bursty and periodically overloads the server or its reverse
+// proxy; the client backs off (honouring Retry-After) and retries rather than
+// failing the whole run.
 const (
 	maxRetries     = 8
 	retryBaseDelay = 500 * time.Millisecond
@@ -230,11 +231,12 @@ func (c *Client) request(ctx context.Context, method, path string, body, out any
 	return readJSON(resp, out, 8<<20)
 }
 
-// retriableDo runs requests built by newReq, retrying on a 429/503 with backoff
-// (honouring Retry-After) so a bursty parallel upload rides out the server's
-// rate limit instead of failing. newReq must produce a fresh request each call
-// so its body can be replayed. It returns the first 2xx response with its body
-// still open for the caller to read.
+// retriableDo runs requests built by newReq, retrying with backoff (honouring
+// Retry-After) on a rate-limited/overloaded status (429/502/503/504) and on a
+// transient transport failure (timeouts, connection resets), so a bursty
+// parallel upload rides out a struggling gateway instead of failing the run.
+// newReq must produce a fresh request each call so its body can be replayed. It
+// returns the first 2xx response with its body still open for the caller to read.
 func (c *Client) retriableDo(ctx context.Context, newReq func() (*http.Request, error)) (*http.Response, error) {
 	for attempt := 0; ; attempt++ {
 		req, err := newReq()
@@ -243,6 +245,14 @@ func (c *Client) retriableDo(ctx context.Context, newReq func() (*http.Request, 
 		}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			// Transport-level failure (no HTTP response). Retry a transient one
+			// unless the caller's context is already done.
+			if attempt < maxRetries && ctx.Err() == nil && isTransientNetErr(err) {
+				if werr := sleepBackoff(ctx, &APIError{}, attempt); werr != nil {
+					return nil, werr
+				}
+				continue
+			}
 			return nil, err
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -276,9 +286,33 @@ func readJSON(resp *http.Response, out any, limit int64) error {
 	return json.Unmarshal(data, out)
 }
 
-// retryable reports whether a status code is worth retrying after a wait.
+// retryable reports whether a status code is worth retrying after a wait: rate
+// limiting plus the gateway/overload statuses a reverse proxy returns when the
+// backend is momentarily unavailable.
 func retryable(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+	switch status {
+	case http.StatusTooManyRequests, // 429
+		http.StatusBadGateway,         // 502
+		http.StatusServiceUnavailable, // 503
+		http.StatusGatewayTimeout:     // 504
+		return true
+	}
+	return false
+}
+
+// isTransientNetErr reports whether a transport error is worth retrying: request
+// timeouts (the server was too slow to answer) and connection-level failures
+// (reset/refused/EOF) that a struggling gateway produces under load.
+func isTransientNetErr(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // sleepBackoff waits before the next attempt: the server's Retry-After if given,

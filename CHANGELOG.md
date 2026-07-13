@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-13
+
+### Fixed
+
+- Uploads now ride out a struggling gateway: the client retries the `502`, `503`
+  and `504` gateway statuses (in addition to `429`) and transient transport
+  failures (request timeouts, connection resets/EOF) with the same backoff, so a
+  parallel bulk upload that momentarily overloads the server or its reverse proxy
+  no longer aborts the run — including on the final manifest save.
+
 ### Changed
 
 - Bump GitHub Actions to Node 24 majors (`actions/checkout@v6`,
@@ -246,7 +256,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...v0.4.0

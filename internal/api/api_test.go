@@ -160,29 +160,60 @@ func TestValidationErrorExposesFields(t *testing.T) {
 	}
 }
 
-func TestRetriesOn429ThenSucceeds(t *testing.T) {
+func TestRetriesTransientStatusesThenSucceeds(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls <= 2 {
+					http.Error(w, `{"message":"transient"}`, status)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"version":7}`))
+			}))
+			defer srv.Close()
+
+			c := testClient(t, srv)
+			v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3)
+			if err != nil {
+				t.Fatalf("save after retries: %v", err)
+			}
+			if v != 7 || calls != 3 {
+				t.Fatalf("version=%d calls=%d, want 7 and 3", v, calls)
+			}
+		})
+	}
+}
+
+func TestRetriesTransientTransportError(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if calls <= 2 {
-			http.Error(w, `{"message":"Too Many Attempts."}`, http.StatusTooManyRequests)
+		if calls == 1 {
+			// Hijack and close the connection abruptly so the client sees a
+			// transport-level failure (EOF / connection reset), not an HTTP status.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("no hijacker")
+			}
+			conn, _, _ := hj.Hijack()
+			_ = conn.Close()
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"version":7}`))
+		_, _ = w.Write([]byte(`{"version":9}`))
 	}))
 	defer srv.Close()
 
 	c := testClient(t, srv)
 	v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3)
 	if err != nil {
-		t.Fatalf("save after retries: %v", err)
+		t.Fatalf("save after transport retry: %v", err)
 	}
-	if v != 7 {
-		t.Fatalf("version = %d, want 7", v)
-	}
-	if calls != 3 {
-		t.Fatalf("server saw %d calls, want 3 (2 rate-limited + 1 success)", calls)
+	if v != 9 || calls != 2 {
+		t.Fatalf("version=%d calls=%d, want 9 and 2", v, calls)
 	}
 }
 
