@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-13
+
+### Security
+
+- Sync heartbeat no longer discloses metadata: it previously sent remote folder
+  names and progress counts to the server; it now reports only a generic module
+  tag, as a zero-knowledge client must.
+- Path-traversal containment on `files download` and `files sync`: local write
+  destinations built from manifest-controlled names are now confined to the
+  target directory, so a hostile record name cannot escape it.
+- Decrypted output is written `0600` and its directories `0700`; both
+  `files`/`gallery` writers refuse to follow a pre-existing symlink at the target.
+- The cached vault key is never written as plaintext: caching is refused when no
+  OS keychain is available, and `session` logout clears both stored secrets.
+- Server-supplied Argon2id parameters are clamped to a safe range, and blob
+  downloads are size-bounded, preventing a hostile server from weakening the key
+  derivation or exhausting memory.
+- Transport hardening: TLS 1.2 minimum, redirects that refuse scheme downgrades
+  and cross-host hops, and a version-less User-Agent to the server.
+- The build is pinned to Go 1.26.5, clearing GO-2026-5856 (crypto/tls Encrypted
+  Client Hello privacy leak); `govulncheck` reports no reachable vulnerabilities.
+
+### Changed
+
+- Introduced the shared `internal/manifeststore` engine and reduced the Files and
+  Todos stores to thin wrappers over it, removing the duplicated conflict-safe
+  save logic (no behavioural change).
+- The sync state key uses SHA-256, and `github.com/spf13/pflag` is updated to
+  v1.0.10.
+- Added a CI workflow (build, vet, gofmt, tests, vulnerability scan) and a
+  release workflow that cross-compiles the Linux and macOS binaries, publishes
+  SHA-256 checksums, and creates the GitHub release from the changelog.
+
 ## [0.3.0] - 2026-07-12
 
 ### Added
@@ -107,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MalteKiefer/ledgerline-cli/releases/tag/v0.1.0

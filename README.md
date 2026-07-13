@@ -1,5 +1,9 @@
 # ledgerline-cli
 
+[![CI](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/ci.yml)
+[![Release](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/release.yml/badge.svg)](https://github.com/MalteKiefer/ledgerline-cli/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A console client for a self-hosted [Ledgerline](https://github.com/MalteKiefer/Ledgerline)
 server, written in Go. It runs on **Linux** and **macOS**.
 
@@ -20,8 +24,12 @@ collects no telemetry.
   - [`auth login`](#auth-login)
   - [`auth status`](#auth-status)
   - [`auth logout`](#auth-logout)
+  - [`auth unlock` / `auth lock`](#auth-unlock--auth-lock)
   - [`gallery upload`](#gallery-upload)
   - [`gallery download`](#gallery-download)
+  - [`files`](#files)
+  - [Settings](#settings)
+  - [`todo`](#todo)
 - [How authentication works](#how-authentication-works)
 - [Security notes](#security-notes)
 - [Development](#development)
@@ -35,15 +43,25 @@ Download the binary for your platform from the
 executable, and place it on your `PATH`:
 
 ```sh
-# Example for macOS on Apple silicon; pick the matching asset for your system.
-curl -L -o ledgerline-cli \
-  https://github.com/MalteKiefer/ledgerline-cli/releases/latest/download/ledgerline-cli-<version>-darwin-arm64
-chmod +x ledgerline-cli
-sudo mv ledgerline-cli /usr/local/bin/
+# Example for macOS on Apple silicon; pick the version and asset for your system.
+VERSION=0.3.1
+ARCH=darwin-arm64
+base=https://github.com/MalteKiefer/ledgerline-cli/releases/download/v$VERSION
+curl -LO "$base/ledgerline-cli-$VERSION-$ARCH"
+curl -LO "$base/checksums.txt"
+
+# Verify the download before installing.
+grep " ledgerline-cli-$VERSION-$ARCH\$" checksums.txt | shasum -a 256 -c -
+
+chmod +x "ledgerline-cli-$VERSION-$ARCH"
+sudo mv "ledgerline-cli-$VERSION-$ARCH" /usr/local/bin/ledgerline-cli
 ```
 
 Supported release targets: `linux/amd64`, `linux/arm64`, `darwin/amd64`,
-`darwin/arm64`.
+`darwin/arm64`. Every release ships a `checksums.txt` with the SHA-256 of each
+binary (use `sha256sum -c` on Linux). Releases are built and published from a
+version tag by the [release workflow](.github/workflows/release.yml), which
+runs the full test and vulnerability-scan suite first.
 
 Verify the install and check for updates:
 
@@ -53,7 +71,8 @@ ledgerline-cli status
 
 ## Build from source
 
-Requires Go 1.24 or newer.
+Requires Go 1.25 or newer. The module pins the build toolchain to Go 1.26.5 (see
+`go.mod`); an older `go` command fetches it automatically on first build.
 
 ```sh
 git clone https://github.com/MalteKiefer/ledgerline-cli.git
@@ -100,12 +119,12 @@ Print build metadata and check for a newer release:
 ```console
 $ ledgerline-cli status
 Repository:  https://github.com/MalteKiefer/ledgerline-cli
-Version:     0.1.0
+Version:     0.3.1
 Commit:      a1b2c3d
-Built:       2026-07-12T06:46:45Z
-Go:          go1.24.0
+Built:       2026-07-13T06:46:45Z
+Go:          go1.26.5
 Platform:    darwin/arm64
-Update:      up to date (latest v0.1.0)
+Update:      up to date (latest v0.3.1)
 ```
 
 The update check is a single unauthenticated request to GitHub and degrades
@@ -367,16 +386,26 @@ The project layout keeps shared concerns reusable so new commands stay
 consistent:
 
 ```
-cmd/                 command tree (root, status, auth, gallery)
-internal/api/        typed HTTP client for the /api/v1 surface
-internal/crypto/     libsodium-compatible crypto (secretbox, Argon2id, secretstream)
-internal/vault/      passphrase → vault key unlock
-internal/gallery/    manifest v2, upload pipeline, Live Photo pairing, sources
-internal/session/    durable credential storage (keychain + file fallback)
-internal/config/     config-directory resolution
-internal/version/    build metadata and update checks
-internal/ui/         prompts and spinner
+cmd/                  command tree (root, status, auth, gallery, files, todo)
+internal/api/         typed HTTP client for the /api/v1 surface
+internal/crypto/      libsodium-compatible crypto (secretbox, Argon2id, secretstream)
+internal/vault/       passphrase → vault key unlock
+internal/manifeststore/ shared opaque-manifest engine (conflict-safe save, DRY)
+internal/files/       Files module: tree, listing, upload, download, two-way sync
+internal/todo/        Todos module: todos and lists over the shared manifest
+internal/gallery/     manifest v2, upload pipeline, Live Photo pairing, sources
+internal/session/     durable credential storage (keychain + file fallback)
+internal/settings/    user-editable settings file (ignore list, sync mappings)
+internal/config/      config-directory resolution
+internal/version/     build metadata and update checks
+internal/ui/          prompts and spinner
 ```
+
+The Files and Todos modules both live in one sealed *workspace manifest* shared
+with the web client (notes, bookmarks, contacts, …). `internal/manifeststore` is
+the single engine that decrypts it, stages edits as operations, and re-seals with
+optimistic-concurrency retry — always preserving keys owned by other modules
+verbatim — so each module is a thin, consistent wrapper.
 
 The gallery crypto reproduces the web vault (`resources/js/vault.js`) byte for
 byte and is verified against libsodium-generated known-answer tests, so photos
