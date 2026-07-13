@@ -4,26 +4,25 @@ import "testing"
 
 func TestValidateUploadFlags(t *testing.T) {
 	cases := []struct {
-		name        string
-		folder      string
-		zip         string
-		googlePhoto bool
-		wantErr     bool
+		name    string
+		opts    uploadOptions
+		wantErr bool
 	}{
-		{"folder only", "/photos", "", false, false},
-		{"folder recursive is fine", "/photos", "", false, false},
-		{"google photos with zip", "", "/t.zip", true, false},
-		{"no source at all", "", "", false, true},
-		{"google photos without zip", "", "", true, true},
-		{"folder mixed with zip", "/photos", "/t.zip", false, true},
-		{"folder mixed with google photos", "/photos", "/t.zip", true, true},
+		{"folder only", uploadOptions{folder: "/photos", jobs: 1}, false},
+		{"google photos with zip", uploadOptions{zipPath: "/t.zip", googlePhoto: true, jobs: 1}, false},
+		{"no source at all", uploadOptions{jobs: 1}, true},
+		{"google photos without zip", uploadOptions{googlePhoto: true, jobs: 1}, true},
+		{"folder mixed with zip", uploadOptions{folder: "/photos", zipPath: "/t.zip", jobs: 1}, true},
+		{"folder mixed with google photos", uploadOptions{folder: "/photos", zipPath: "/t.zip", googlePhoto: true, jobs: 1}, true},
+		{"server and local ML together", uploadOptions{folder: "/photos", withML: true, mlLocalURL: "http://localhost:3003", jobs: 1}, true},
+		{"local ML alone is fine", uploadOptions{folder: "/photos", mlLocalURL: "http://localhost:3003", jobs: 1}, false},
+		{"zero jobs is rejected", uploadOptions{folder: "/photos", jobs: 0}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateUploadFlags(tc.folder, tc.zip, tc.googlePhoto)
+			err := validateUploadFlags(tc.opts)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateUploadFlags(%q,%q,%v) err=%v, wantErr=%v",
-					tc.folder, tc.zip, tc.googlePhoto, err, tc.wantErr)
+				t.Fatalf("validateUploadFlags(%+v) err=%v, wantErr=%v", tc.opts, err, tc.wantErr)
 			}
 		})
 	}

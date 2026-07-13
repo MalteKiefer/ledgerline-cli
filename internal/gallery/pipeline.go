@@ -13,24 +13,28 @@ import (
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ml"
 )
 
 // sigCap is the head/tail window the exact-file signature hashes (1 MiB), same
 // as the web client's _fileSig.
 const sigCap = 1024 * 1024
 
-// Uploader runs the zero-knowledge upload pipeline for one photo at a time.
+// Uploader runs the zero-knowledge upload pipeline for one photo at a time. It
+// is safe for concurrent use across items (the store it writes to is guarded).
 type Uploader struct {
-	client *api.Client
-	store  *Store
-	vk     []byte
-	withML bool
+	client   *api.Client
+	store    *Store
+	vk       []byte
+	withML   bool        // run the CLIP + face pass on the server
+	analyzer ml.Analyzer // run it on a local ML instance instead (nil if unused)
 }
 
-// NewUploader builds an uploader. withML enables the CLIP embedding + face
-// detection pass (needs the server ML sidecar).
-func NewUploader(client *api.Client, store *Store, vaultKey []byte, withML bool) *Uploader {
-	return &Uploader{client: client, store: store, vk: vaultKey, withML: withML}
+// NewUploader builds an uploader. withML enables the server-side CLIP embedding
+// + face detection pass; analyzer, when non-nil, runs that pass on a local ML
+// instance instead. At most one of the two is in effect.
+func NewUploader(client *api.Client, store *Store, vaultKey []byte, withML bool, analyzer ml.Analyzer) *Uploader {
+	return &Uploader{client: client, store: store, vk: vaultKey, withML: withML, analyzer: analyzer}
 }
 
 // Item is one thing to upload: a still, plus an optional paired motion clip
@@ -94,14 +98,25 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 		}
 	}
 
-	// 3. Transient-plaintext transform: thumbnails, EXIF, (optionally) ML. The
-	// declared mime tells the server whether to treat this as a video.
+	// 3. Transient-plaintext transform: thumbnails, EXIF, (optionally) server ML.
+	// The declared mime tells the server whether to treat this as a video.
 	d, err := u.client.ProcessPhoto(ctx, name, rec.Mime, plain, u.withML)
 	if err != nil {
 		return 0, nil, fmt.Errorf("process: %w", err)
 	}
 
-	if err := u.applyDerived(ctx, rec, d, item); err != nil {
+	// 4. Optional local ML: run CLIP + face detection on the server's rendition
+	// and fold the results into the derived data, so the record is analysed
+	// exactly as a server-ML upload would be.
+	mlResolved := u.withML
+	if u.analyzer != nil {
+		if err := u.runLocalML(ctx, &d); err != nil {
+			return 0, nil, fmt.Errorf("local ML: %w", err)
+		}
+		mlResolved = true
+	}
+
+	if err := u.applyDerived(ctx, rec, d, item, mlResolved); err != nil {
 		return 0, nil, err
 	}
 
@@ -134,9 +149,45 @@ func (u *Uploader) VerifyOriginal(ctx context.Context, rec *PhotoRecord, plain [
 	return u.VerifyBlob(ctx, rec.OriginalRef, rec.OriginalKey, plain)
 }
 
+// runLocalML analyses the server's rendition on the local ML instance and folds
+// the CLIP embedding and detected faces into d, so applyDerived stores them just
+// like a server-ML result. It analyses the medium rendition (falling back to the
+// thumbnail) because those are already decodable JPEGs regardless of the original
+// format (HEIC/RAW/video), and face boxes then match the image being cropped.
+func (u *Uploader) runLocalML(ctx context.Context, d *api.ProcessResult) error {
+	img, ok := decodeB64(d.Medium)
+	if !ok {
+		img, ok = decodeB64(d.Thumb)
+	}
+	if !ok {
+		return fmt.Errorf("no rendition to analyse")
+	}
+	res, err := u.analyzer.Analyze(ctx, img)
+	if err != nil {
+		return err
+	}
+	if len(res.Embedding) > 0 {
+		if enc, merr := json.Marshal(res.Embedding); merr == nil {
+			d.Embedding = enc
+		}
+	}
+	d.Faces = make([]api.ProcessFace, 0, len(res.Faces))
+	for _, f := range res.Faces {
+		d.Faces = append(d.Faces, api.ProcessFace{
+			Score:     f.Score,
+			Box:       f.Box,
+			Embedding: f.Embedding,
+			Crop:      base64.StdEncoding.EncodeToString(f.CropJPEG),
+		})
+	}
+	return nil
+}
+
 // applyDerived encrypts and stores the process outputs (thumb/medium/motion,
 // face crops, metadata) and promotes the display fields onto the record.
-func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.ProcessResult, item Item) error {
+// mlResolved reports whether the ML pass (server or local) ran, so the record is
+// marked analysed instead of leaving it for the web client's deferred pass.
+func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.ProcessResult, item Item, mlResolved bool) error {
 	if b, ok := decodeB64(d.Thumb); ok {
 		ref, key, err := u.encStore(ctx, b)
 		if err != nil {
@@ -213,8 +264,8 @@ func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.Pro
 		rec.contentID = *d.ContentID // used to pair Live Photo halves post-upload
 	}
 
-	if u.withML {
-		// ML ran inline: faces are known now (0 when none detected).
+	if mlResolved {
+		// ML ran (server or local): faces are known now (0 when none detected).
 		n := len(faces)
 		rec.HasFaces = &n
 		rec.FaceCropRefs = cropRefs

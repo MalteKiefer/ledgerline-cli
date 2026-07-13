@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
@@ -42,6 +43,11 @@ type shardDesc struct {
 type Store struct {
 	client *api.Client
 	vk     []byte
+
+	// mu guards the fields mutated during a parallel upload: the added records
+	// and the signature index. Blob/manifest saves run at a batch barrier, when
+	// no upload workers are in flight, so they need no locking.
+	mu sync.Mutex
 
 	version    int64
 	basePhotos []json.RawMessage // photos loaded from the server (preserved verbatim)
@@ -168,7 +174,14 @@ func (s *Store) indexSigs(photos []json.RawMessage) {
 
 // HasSig reports whether a photo with this signature already exists (including
 // ones appended this session).
-func (s *Store) HasSig(sig string) bool { return sig != "" && s.sigs[sig] }
+func (s *Store) HasSig(sig string) bool {
+	if sig == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sigs[sig]
+}
 
 // Records returns the loaded photo records (typed) for read-only use such as
 // download. Unknown fields on a record are ignored.
@@ -185,6 +198,8 @@ func (s *Store) Records() []PhotoRecord {
 
 // Add appends a finished photo record and remembers its signature.
 func (s *Store) Add(rec *PhotoRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.added = append(s.added, rec)
 	if rec.Sig != "" {
 		s.sigs[rec.Sig] = true
@@ -193,7 +208,11 @@ func (s *Store) Add(rec *PhotoRecord) error {
 }
 
 // PendingCount is how many new photos are staged for the next save.
-func (s *Store) PendingCount() int { return len(s.added) }
+func (s *Store) PendingCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.added)
+}
 
 // MergeLivePhotos pairs a still and its separately-uploaded video by Apple
 // content id (how iCloud exports split Live Photos, since the two files have

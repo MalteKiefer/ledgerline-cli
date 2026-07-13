@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -195,7 +196,7 @@ func TestUploadPipelineEndToEnd(t *testing.T) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	up := NewUploader(client, store, vk, false)
+	up := NewUploader(client, store, vk, false, nil)
 
 	outcome, rec, err := up.Upload(ctx, Item{StillPath: photoPath}, original)
 	if err != nil {
@@ -262,7 +263,7 @@ func TestUploadDedup(t *testing.T) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	up := NewUploader(client, store, vk, false)
+	up := NewUploader(client, store, vk, false, nil)
 	data := []byte("dup-bytes")
 
 	if o, _, err := up.Upload(ctx, Item{StillPath: "/x/a.jpg"}, data); err != nil || o != Uploaded {
@@ -270,6 +271,47 @@ func TestUploadDedup(t *testing.T) {
 	}
 	if o, _, err := up.Upload(ctx, Item{StillPath: "/x/b.jpg"}, data); err != nil || o != Duplicate {
 		t.Fatalf("second upload should be a duplicate: o=%v err=%v", o, err)
+	}
+}
+
+func TestParallelUploadIsRaceFree(t *testing.T) {
+	const pass = "pw"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, pass)
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk, false, nil)
+
+	// Upload many distinct items concurrently; the store's added list and sig
+	// index must stay consistent (run under -race to catch a regression).
+	const n = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			data := []byte(fmt.Sprintf("photo-bytes-%d", i))
+			o, _, err := up.Upload(ctx, Item{StillPath: fmt.Sprintf("/x/p%d.jpg", i)}, data)
+			if err != nil {
+				errs <- err
+			} else if o != Uploaded {
+				errs <- fmt.Errorf("item %d: outcome %v", i, o)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if got := store.PendingCount(); got != n {
+		t.Fatalf("PendingCount = %d, want %d", got, n)
 	}
 }
 
