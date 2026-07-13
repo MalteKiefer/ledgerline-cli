@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"net/url"
 )
 
 // User is the authenticated identity returned by the API.
@@ -30,7 +29,7 @@ const (
 	PairApproved PairStatus = "approved"
 )
 
-// pairPollResponse is the shape of GET /api/v1/auth/pair.
+// pairPollResponse is the shape of POST /api/v1/auth/pair/collect.
 type pairPollResponse struct {
 	Status PairStatus `json:"status"`
 	Token  string     `json:"token"`
@@ -56,8 +55,10 @@ func (c *Client) ClaimPair(ctx context.Context, code, deviceName string) error {
 // returns (PairApproved, result, nil) exactly once — the code is then spent and
 // further polls yield a 410 *APIError.
 func (c *Client) PollPair(ctx context.Context, code string) (PairStatus, *PairResult, error) {
+	// POST so the one-time code travels in the request body, never in a URL/
+	// query string (which would land in server access logs and proxies).
 	var resp pairPollResponse
-	if err := c.request(ctx, "GET", "/api/v1/auth/pair?code="+url.QueryEscape(code), nil, &resp); err != nil {
+	if err := c.request(ctx, "POST", "/api/v1/auth/pair/collect", map[string]string{"code": code}, &resp); err != nil {
 		return "", nil, err
 	}
 	if resp.Status != PairApproved || resp.Token == "" {

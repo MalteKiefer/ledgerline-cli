@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.1] - 2026-07-13
+## [0.5.0] - 2026-07-13
+
+### Changed
+
+- Device pairing now polls `POST /api/v1/auth/pair/collect` with the one-time
+  code in the JSON request body, replacing `GET /api/v1/auth/pair?code=…`. The
+  code no longer travels in a URL/query string, so it can never land in server
+  access logs or intermediary proxies. **This requires Ledgerline web
+  `v1.452.0` or newer** — existing tokens and all data operations keep working
+  with an older server; only new `auth login` pairings need the updated server.
 
 ### Fixed
 
@@ -186,8 +195,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.1...HEAD
-[0.4.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...v0.4.1
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...v0.3.0

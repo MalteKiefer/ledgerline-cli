@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -67,8 +68,15 @@ func TestClaimPairExpiredCodeIsGone(t *testing.T) {
 func TestPollPairPendingThenApproved(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("code"); got != "the code" {
-			t.Errorf("code query = %q", got)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/auth/pair/collect" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Code != "the code" {
+			t.Errorf("code body = %q", body.Code)
 		}
 		calls++
 		if calls == 1 {
