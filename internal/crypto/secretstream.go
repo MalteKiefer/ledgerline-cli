@@ -21,7 +21,11 @@ import (
 	"errors"
 
 	"golang.org/x/crypto/chacha20"
-	"golang.org/x/crypto/poly1305"
+	// Raw Poly1305 is required to reproduce libsodium's secretstream
+	// byte-for-byte; the higher-level chacha20poly1305 construction frames its
+	// output differently and would not interoperate with the server.
+	//lint:ignore SA1019 intentional low-level use, see comment above
+	"golang.org/x/crypto/poly1305" //nolint:staticcheck
 )
 
 // secretstream constants, matching libsodium.
