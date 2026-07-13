@@ -18,6 +18,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -101,18 +102,20 @@ func (m *Immich) entries() map[string]any {
 	return e
 }
 
-// predictResponse is immich-ml's /predict JSON, keyed by task.
+// predictResponse is immich-ml's /predict JSON, keyed by task. immich-ml returns
+// embeddings as a string holding a JSON float array (e.g. "[0.1,-1.5,…]") and
+// bounding-box coordinates as floats.
 type predictResponse struct {
 	Clip  json.RawMessage `json:"clip"`
 	Faces []struct {
 		BoundingBox struct {
-			X1 int `json:"x1"`
-			Y1 int `json:"y1"`
-			X2 int `json:"x2"`
-			Y2 int `json:"y2"`
+			X1 float64 `json:"x1"`
+			Y1 float64 `json:"y1"`
+			X2 float64 `json:"x2"`
+			Y2 float64 `json:"y2"`
 		} `json:"boundingBox"`
-		Embedding string  `json:"embedding"` // base64 float32
-		Score     float64 `json:"score"`
+		Embedding json.RawMessage `json:"embedding"`
+		Score     float64         `json:"score"`
 	} `json:"facial-recognition"`
 }
 
@@ -170,12 +173,13 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 			return Result{}, fmt.Errorf("decode image for face crops: %w", derr)
 		}
 		for _, f := range pr.Faces {
-			emb, ok := decodeFloat32B64(f.Embedding)
-			if !ok {
+			emb := parseEmbedding(f.Embedding)
+			if len(emb) == 0 {
 				continue
 			}
-			box := []float64{float64(f.BoundingBox.X1), float64(f.BoundingBox.Y1), float64(f.BoundingBox.X2), float64(f.BoundingBox.Y2)}
-			crop, cerr := cropFace(img, f.BoundingBox.X1, f.BoundingBox.Y1, f.BoundingBox.X2, f.BoundingBox.Y2)
+			bb := f.BoundingBox
+			box := []float64{bb.X1, bb.Y1, bb.X2, bb.Y2}
+			crop, cerr := cropFace(img, int(bb.X1), int(bb.Y1), int(bb.X2), int(bb.Y2))
 			if cerr != nil {
 				continue
 			}
@@ -185,8 +189,10 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 	return res, nil
 }
 
-// parseEmbedding decodes a CLIP embedding that immich-ml returns either as a
-// base64 float32 string or as a JSON number array. It returns nil when absent.
+// parseEmbedding decodes an immich-ml embedding. Current builds return a string
+// holding a JSON float array (e.g. "[0.1,-1.5,…]"); a bare JSON array and a
+// base64 float32 string are also accepted for forward/backward compatibility. It
+// returns nil when absent or unparseable.
 func parseEmbedding(raw json.RawMessage) []float64 {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || string(raw) == "null" {
@@ -197,11 +203,20 @@ func parseEmbedding(raw json.RawMessage) []float64 {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return nil
 		}
+		s = strings.TrimSpace(s)
+		if strings.HasPrefix(s, "[") {
+			return decodeFloatArray([]byte(s))
+		}
 		emb, _ := decodeFloat32B64(s)
 		return emb
 	}
+	return decodeFloatArray(raw)
+}
+
+// decodeFloatArray unmarshals a JSON number array into float64s (nil on error).
+func decodeFloatArray(b []byte) []float64 {
 	var nums []float64
-	if err := json.Unmarshal(raw, &nums); err != nil {
+	if err := json.Unmarshal(b, &nums); err != nil {
 		return nil
 	}
 	return nums

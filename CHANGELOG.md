@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-13
+
+### Changed
+
+- Device pairing now polls `POST /api/v1/auth/pair/collect` with the one-time
+  code in the JSON request body, replacing `GET /api/v1/auth/pair?code=…`. The
+  code no longer travels in a URL/query string, so it can never land in server
+  access logs or intermediary proxies. **This requires Ledgerline web
+  `v1.452.0` or newer** — existing tokens and all data operations keep working
+  with an older server; only new `auth login` pairings need the updated server.
+
+### Fixed
+
+- Rate-limited (`429 Too Many Attempts`) responses no longer abort an upload. A
+  bursty parallel run — many blob uploads plus the `process` and manifest-save
+  calls — can trip the server's rate limit; the API client now retries such
+  responses (and `503`s) with exponential, jittered backoff that honours the
+  server's `Retry-After`, across blob upload/download, `process` and the gallery
+  save. This makes `gallery upload --jobs N` robust at higher concurrency.
+- Progress lines during a parallel upload are numbered by a monotonic completion
+  counter instead of the item's input position, so they read `[1/N] [2/N] …` in
+  the order items finish rather than appearing shuffled.
+- `--ml-local` now parses the real immich-machine-learning `/predict` response:
+  embeddings are returned as a string holding a JSON float array (not base64
+  float32) and bounding-box coordinates as floats. The previous decoding dropped
+  every face and the CLIP embedding; verified against a live immich-ml instance.
+
 ## [0.4.0] - 2026-07-13
 
 ### Added
@@ -168,7 +195,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...v0.3.0

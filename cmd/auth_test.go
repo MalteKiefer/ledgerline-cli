@@ -23,7 +23,7 @@ func TestAuthLoginEndToEnd(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/pair":
 			claimed = true
 			w.Write([]byte(`{"status":"pending"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/auth/pair":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/pair/collect":
 			if !claimed {
 				t.Error("polled before claiming")
 			}

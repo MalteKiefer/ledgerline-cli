@@ -27,17 +27,22 @@ func (c *Client) uploadBlob(ctx context.Context, path string, data []byte) (stri
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(path), &buf)
-	if err != nil {
-		return "", err
-	}
-	c.applyAuth(req)
-	req.Header.Set("Content-Type", w.FormDataContentType())
+	bodyBytes := buf.Bytes()
+	contentType := w.FormDataContentType()
 
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := c.do(req, &out); err != nil {
+	err = c.do(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint(path), bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, err
+		}
+		c.applyAuth(req)
+		req.Header.Set("Content-Type", contentType)
+		return req, nil
+	}, &out)
+	if err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -48,20 +53,18 @@ func (c *Client) getBlob(ctx context.Context, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint(path), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.applyAuth(req)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.retriableDo(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint(path), nil)
+		if err != nil {
+			return nil, err
+		}
+		c.applyAuth(req)
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, decodeError(resp)
-	}
 	// Bound the body so a hostile/broken server can't stream an unbounded blob
 	// and OOM the client. The cap sits above the largest legitimate media +
 	// Padmé padding; an over-long body is truncated and will fail to decrypt.
@@ -76,10 +79,12 @@ func (c *Client) deleteBlob(ctx context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "DELETE", c.endpoint(path), nil)
-	if err != nil {
-		return err
-	}
-	c.applyAuth(req)
-	return c.do(req, nil)
+	return c.do(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", c.endpoint(path), nil)
+		if err != nil {
+			return nil, err
+		}
+		c.applyAuth(req)
+		return req, nil
+	}, nil)
 }

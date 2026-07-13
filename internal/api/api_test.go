@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestNewRejectsCleartextForRemoteHosts(t *testing.T) {
@@ -66,8 +68,15 @@ func TestClaimPairExpiredCodeIsGone(t *testing.T) {
 func TestPollPairPendingThenApproved(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("code"); got != "the code" {
-			t.Errorf("code query = %q", got)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/auth/pair/collect" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Code != "the code" {
+			t.Errorf("code body = %q", body.Code)
 		}
 		calls++
 		if calls == 1 {
@@ -148,6 +157,52 @@ func TestValidationErrorExposesFields(t *testing.T) {
 	}
 	if apiErr.StatusCode != 422 || len(apiErr.Fields["code"]) != 1 {
 		t.Fatalf("unexpected APIError: %+v", apiErr)
+	}
+}
+
+func TestRetriesOn429ThenSucceeds(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			http.Error(w, `{"message":"Too Many Attempts."}`, http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":7}`))
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3)
+	if err != nil {
+		t.Fatalf("save after retries: %v", err)
+	}
+	if v != 7 {
+		t.Fatalf("version = %d, want 7", v)
+	}
+	if calls != 3 {
+		t.Fatalf("server saw %d calls, want 3 (2 rate-limited + 1 success)", calls)
+	}
+}
+
+func TestGivesUpAfterMaxRetries(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Error(w, `{"message":"Too Many Attempts."}`, http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := c.SaveGalleryStore(ctx, "ciphertext", 3)
+	if Status(err) != http.StatusTooManyRequests && err != context.DeadlineExceeded {
+		t.Fatalf("expected a 429 or deadline after exhausting retries, got %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("expected multiple attempts, got %d", calls)
 	}
 }
 
