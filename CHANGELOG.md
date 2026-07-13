@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bump GitHub Actions to Node 24 majors (`actions/checkout@v6`,
+  `actions/setup-go@v6`, `actions/attest-build-provenance@v4`), clearing the
+  Node 20 deprecation warnings.
+
+### Documentation
+
+- README documents verifying a release: the keyless cosign signature over
+  `checksums.txt` and the per-binary build-provenance attestation.
+
 ## [0.6.0] - 2026-07-13
 
 ### Added
