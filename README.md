@@ -46,7 +46,7 @@ executable, and place it on your `PATH`:
 
 ```sh
 # Example for macOS on Apple silicon; pick the version and asset for your system.
-VERSION=0.3.1
+VERSION=0.6.0
 ARCH=darwin-arm64
 base=https://github.com/MalteKiefer/ledgerline-cli/releases/download/v$VERSION
 curl -LO "$base/ledgerline-cli-$VERSION-$ARCH"
@@ -64,6 +64,30 @@ Supported release targets: `linux/amd64`, `linux/arm64`, `darwin/amd64`,
 binary (use `sha256sum -c` on Linux). Releases are built and published from a
 version tag by the [release workflow](.github/workflows/release.yml), which
 runs the full test and vulnerability-scan suite first.
+
+### Verifying the release signature (optional)
+
+`checksums.txt` is signed keyless with [cosign](https://docs.sigstore.dev/) via
+the release workflow's GitHub OIDC identity, and each binary carries a build
+provenance attestation. To verify the checksums were produced by this repo's
+release workflow (requires the `cosign` CLI):
+
+```sh
+curl -LO "$base/checksums.txt.sig"
+curl -LO "$base/checksums.txt.pem"
+
+cosign verify-blob checksums.txt \
+  --signature checksums.txt.sig \
+  --certificate checksums.txt.pem \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/MalteKiefer/ledgerline-cli/\.github/workflows/release\.yml@'
+```
+
+You can also verify a binary's provenance with the GitHub CLI:
+
+```sh
+gh attestation verify "ledgerline-cli-$VERSION-$ARCH" --repo MalteKiefer/ledgerline-cli
+```
 
 Verify the install and check for updates:
 

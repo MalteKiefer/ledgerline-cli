@@ -23,13 +23,13 @@ jobs:
       attestations: write # record the provenance attestation
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Full history + tags so `git describe` stamps the exact version.
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
@@ -45,7 +45,7 @@ jobs:
         run: sha256sum ledgerline-cli-* > checksums.txt
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/ledgerline-cli-*
 
