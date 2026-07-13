@@ -62,11 +62,13 @@ func TestImmichAnalyze(t *testing.T) {
 		if _, ok := entries["facial-recognition"]; !ok {
 			t.Errorf("entries missing facial-recognition: %v", entries)
 		}
+		// immich-ml returns embeddings as a string holding a JSON float array and
+		// bounding-box coordinates as floats.
 		resp := map[string]any{
-			"clip": float32B64(0.1, 0.2, 0.3),
+			"clip": "[0.1,0.2,0.3]",
 			"facial-recognition": []map[string]any{{
-				"boundingBox": map[string]int{"x1": 40, "y1": 50, "x2": 120, "y2": 150},
-				"embedding":   float32B64(1, 2, 3, 4),
+				"boundingBox": map[string]float64{"x1": 40, "y1": 50, "x2": 120, "y2": 150},
+				"embedding":   "[1,2,3,4]",
 				"score":       0.97,
 			}},
 			"imageHeight": 200,
@@ -116,12 +118,16 @@ func TestImmichAnalyze(t *testing.T) {
 }
 
 func TestParseEmbedding(t *testing.T) {
+	// The real immich-ml format: a string holding a JSON float array.
+	if emb := parseEmbedding(json.RawMessage(`"[1.5,-2.5,3]"`)); len(emb) != 3 || emb[1] != -2.5 {
+		t.Fatalf("string-array form: %v", emb)
+	}
 	if emb := parseEmbedding(json.RawMessage(`[1.5, 2.5]`)); len(emb) != 2 || emb[0] != 1.5 {
-		t.Fatalf("array form: %v", emb)
+		t.Fatalf("bare-array form: %v", emb)
 	}
 	b64, _ := json.Marshal(float32B64(3, 4))
 	if emb := parseEmbedding(json.RawMessage(b64)); len(emb) != 2 || emb[1] != 4 {
-		t.Fatalf("base64 form: %v", emb)
+		t.Fatalf("base64 fallback form: %v", emb)
 	}
 	if emb := parseEmbedding(json.RawMessage(`null`)); emb != nil {
 		t.Fatalf("null should be nil: %v", emb)

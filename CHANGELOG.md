@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Progress lines during a parallel upload are numbered by a monotonic completion
   counter instead of the item's input position, so they read `[1/N] [2/N] …` in
   the order items finish rather than appearing shuffled.
+- `--ml-local` now parses the real immich-machine-learning `/predict` response:
+  embeddings are returned as a string holding a JSON float array (not base64
+  float32) and bounding-box coordinates as floats. The previous decoding dropped
+  every face and the CLIP embedding; verified against a live immich-ml instance.
 
 ## [0.4.0] - 2026-07-13
 
