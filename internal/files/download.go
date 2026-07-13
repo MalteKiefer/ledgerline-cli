@@ -7,6 +7,7 @@ import (
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
+	"github.com/MalteKiefer/ledgerline-cli/internal/manifeststore"
 )
 
 // Entry is a non-trashed file with its resolved slash path.
@@ -87,7 +88,7 @@ func (d *Downloader) Fetch(ctx context.Context, fv FileView) ([]byte, error) {
 func rawByID(records []json.RawMessage) map[string]json.RawMessage {
 	m := make(map[string]json.RawMessage, len(records))
 	for _, r := range records {
-		m[recordID(r)] = r
+		m[manifeststore.RecordID(r)] = r
 	}
 	return m
 }

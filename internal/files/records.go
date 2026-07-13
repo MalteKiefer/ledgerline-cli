@@ -107,38 +107,6 @@ func interpretTrashed(raw json.RawMessage) string {
 	return "trashed" // truthy non-string (e.g. bool true)
 }
 
-// recordID extracts the id from any raw record.
-func recordID(raw json.RawMessage) string {
-	var r struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal(raw, &r)
-	return r.ID
-}
-
-// patchRecord applies key/value updates to a raw record, preserving every other
-// field (modelled or not). A nil value deletes the key.
-func patchRecord(raw json.RawMessage, patch map[string]any) (json.RawMessage, error) {
-	obj := map[string]json.RawMessage{}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &obj); err != nil {
-			return nil, err
-		}
-	}
-	for k, v := range patch {
-		if v == nil {
-			delete(obj, k)
-			continue
-		}
-		enc, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
-		obj[k] = enc
-	}
-	return json.Marshal(obj)
-}
-
 // newFileRecord builds a fresh file record and returns it with its id. folder is
 // the parent id (nil = root).
 func newFileRecord(name, mime string, size int64, blob, encFileKey string, folder *string, createdISO string) (json.RawMessage, string, error) {

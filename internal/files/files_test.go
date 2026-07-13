@@ -14,6 +14,7 @@ import (
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
+	"github.com/MalteKiefer/ledgerline-cli/internal/manifeststore"
 	"github.com/MalteKiefer/ledgerline-cli/internal/vault"
 )
 
@@ -154,7 +155,7 @@ func (m *mock) currentManifest(t *testing.T) map[string]json.RawMessage {
 		t.Fatal(err)
 	}
 	var out map[string]json.RawMessage
-	if err := json.Unmarshal(trimJSON(raw), &out); err != nil {
+	if err := json.Unmarshal(manifeststore.TrimJSON(raw), &out); err != nil {
 		t.Fatal(err)
 	}
 	return out
