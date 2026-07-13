@@ -66,17 +66,32 @@ func (c *Client) PollPair(ctx context.Context, code string) (PairStatus, *PairRe
 	return PairApproved, &PairResult{Token: resp.Token, User: resp.User}, nil
 }
 
-// Me returns the authenticated user and storage usage for the bearer in use.
-// A 401 *APIError indicates the token is missing, invalid, or revoked.
-func (c *Client) Me(ctx context.Context) (User, Usage, error) {
+// Me returns the authenticated user, storage usage, and whether the owner has
+// requested a remote wipe of this client. A 401 *APIError indicates the token is
+// missing, invalid, or revoked.
+func (c *Client) Me(ctx context.Context) (User, Usage, bool, error) {
 	var resp struct {
 		User  User  `json:"user"`
 		Usage Usage `json:"usage"`
+		Wipe  bool  `json:"wipe"`
 	}
 	if err := c.request(ctx, "GET", "/api/v1/me", nil, &resp); err != nil {
-		return User{}, Usage{}, err
+		return User{}, Usage{}, false, err
 	}
-	return resp.User, resp.Usage, nil
+	return resp.User, resp.Usage, resp.Wipe, nil
+}
+
+// Heartbeat reports this client's sync activity (state is "idle" or "syncing",
+// detail is a short human summary) and returns whether a remote wipe is pending.
+func (c *Client) Heartbeat(ctx context.Context, state, detail string) (wipe bool, err error) {
+	body := map[string]string{"state": state, "detail": detail}
+	var resp struct {
+		Wipe bool `json:"wipe"`
+	}
+	if err := c.request(ctx, "POST", "/api/v1/device/heartbeat", body, &resp); err != nil {
+		return false, err
+	}
+	return resp.Wipe, nil
 }
 
 // Logout revokes the bearer currently in use (server-side), ending the session.

@@ -44,6 +44,7 @@ type Spinner struct {
 	label   string
 	mu      sync.Mutex
 	stop    chan struct{}
+	started bool
 	stopped bool
 }
 
@@ -52,8 +53,16 @@ func NewSpinner(out io.Writer, label string) *Spinner {
 	return &Spinner{out: out, label: label, stop: make(chan struct{})}
 }
 
-// Start begins animating until Stop is called.
+// Start begins animating until Stop is called. It is a no-op if already started.
 func (s *Spinner) Start() {
+	s.mu.Lock()
+	if s.started || s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	s.started = true
+	s.mu.Unlock()
+
 	frames := []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
 	go func() {
 		i := 0

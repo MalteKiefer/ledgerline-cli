@@ -10,6 +10,7 @@ package vault
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
@@ -32,6 +33,9 @@ func Unlock(ctx context.Context, client *api.Client, passphrase string) ([]byte,
 		return nil, ErrNotConfigured
 	}
 
+	if err := validateKDF(status.KdfOps, status.KdfMem); err != nil {
+		return nil, err
+	}
 	salt, err := decodeB64(status.Salt)
 	if err != nil {
 		return nil, err
@@ -43,6 +47,28 @@ func Unlock(ctx context.Context, client *api.Client, passphrase string) ([]byte,
 		return nil, ErrWrongPassphrase
 	}
 	return vk, nil
+}
+
+// KDF parameter bounds. The server supplies opslimit/memlimit; clamp them to a
+// sane range so a hostile server can neither weaken the derivation (tiny params)
+// nor exhaust client memory/CPU before the passphrase is even checked (huge
+// params). libsodium SENSITIVE/MODERATE (ops 4, mem 256 MiB) sits well inside.
+const (
+	minKdfOps = 1
+	maxKdfOps = 16
+	minKdfMem = 8 * 1024 * 1024        // 8 MiB
+	maxKdfMem = 2 * 1024 * 1024 * 1024 // 2 GiB
+)
+
+// validateKDF rejects out-of-range server-supplied Argon2id parameters.
+func validateKDF(ops, memBytes uint64) error {
+	if ops < minKdfOps || ops > maxKdfOps {
+		return fmt.Errorf("vault: server KDF opslimit %d out of accepted range [%d,%d]", ops, minKdfOps, maxKdfOps)
+	}
+	if memBytes < minKdfMem || memBytes > maxKdfMem {
+		return fmt.Errorf("vault: server KDF memlimit %d out of accepted range [%d,%d]", memBytes, minKdfMem, maxKdfMem)
+	}
+	return nil
 }
 
 // RecoverWithCode unlocks the vault with the high-entropy recovery code instead

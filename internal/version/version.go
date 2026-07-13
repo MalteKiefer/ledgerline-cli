@@ -53,11 +53,6 @@ func Current() Info {
 	}
 }
 
-// String renders the version alone, e.g. "ledgerline-cli 1.2.3".
-func (i Info) String() string {
-	return fmt.Sprintf("ledgerline-cli %s", i.Version)
-}
-
 // Release describes the latest release as reported by GitHub.
 type Release struct {
 	TagName string `json:"tag_name"`

@@ -1,5 +1,9 @@
 # ledgerline-cli
 
+[![CI](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/ci.yml)
+[![Release](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/release.yml/badge.svg)](https://github.com/MalteKiefer/ledgerline-cli/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A console client for a self-hosted [Ledgerline](https://github.com/MalteKiefer/Ledgerline)
 server, written in Go. It runs on **Linux** and **macOS**.
 
@@ -20,8 +24,12 @@ collects no telemetry.
   - [`auth login`](#auth-login)
   - [`auth status`](#auth-status)
   - [`auth logout`](#auth-logout)
+  - [`auth unlock` / `auth lock`](#auth-unlock--auth-lock)
   - [`gallery upload`](#gallery-upload)
   - [`gallery download`](#gallery-download)
+  - [`files`](#files)
+  - [Settings](#settings)
+  - [`todo`](#todo)
 - [How authentication works](#how-authentication-works)
 - [Security notes](#security-notes)
 - [Development](#development)
@@ -35,15 +43,25 @@ Download the binary for your platform from the
 executable, and place it on your `PATH`:
 
 ```sh
-# Example for macOS on Apple silicon; pick the matching asset for your system.
-curl -L -o ledgerline-cli \
-  https://github.com/MalteKiefer/ledgerline-cli/releases/latest/download/ledgerline-cli-<version>-darwin-arm64
-chmod +x ledgerline-cli
-sudo mv ledgerline-cli /usr/local/bin/
+# Example for macOS on Apple silicon; pick the version and asset for your system.
+VERSION=0.3.1
+ARCH=darwin-arm64
+base=https://github.com/MalteKiefer/ledgerline-cli/releases/download/v$VERSION
+curl -LO "$base/ledgerline-cli-$VERSION-$ARCH"
+curl -LO "$base/checksums.txt"
+
+# Verify the download before installing.
+grep " ledgerline-cli-$VERSION-$ARCH\$" checksums.txt | shasum -a 256 -c -
+
+chmod +x "ledgerline-cli-$VERSION-$ARCH"
+sudo mv "ledgerline-cli-$VERSION-$ARCH" /usr/local/bin/ledgerline-cli
 ```
 
 Supported release targets: `linux/amd64`, `linux/arm64`, `darwin/amd64`,
-`darwin/arm64`.
+`darwin/arm64`. Every release ships a `checksums.txt` with the SHA-256 of each
+binary (use `sha256sum -c` on Linux). Releases are built and published from a
+version tag by the [release workflow](.github/workflows/release.yml), which
+runs the full test and vulnerability-scan suite first.
 
 Verify the install and check for updates:
 
@@ -53,7 +71,8 @@ ledgerline-cli status
 
 ## Build from source
 
-Requires Go 1.24 or newer.
+Requires Go 1.25 or newer. The module pins the build toolchain to Go 1.26.5 (see
+`go.mod`); an older `go` command fetches it automatically on first build.
 
 ```sh
 git clone https://github.com/MalteKiefer/ledgerline-cli.git
@@ -100,12 +119,12 @@ Print build metadata and check for a newer release:
 ```console
 $ ledgerline-cli status
 Repository:  https://github.com/MalteKiefer/ledgerline-cli
-Version:     0.1.0
+Version:     0.3.1
 Commit:      a1b2c3d
-Built:       2026-07-12T06:46:45Z
-Go:          go1.24.0
+Built:       2026-07-13T06:46:45Z
+Go:          go1.26.5
 Platform:    darwin/arm64
-Update:      up to date (latest v0.1.0)
+Update:      up to date (latest v0.3.1)
 ```
 
 The update check is a single unauthenticated request to GitHub and degrades
@@ -166,6 +185,20 @@ Revoke the token server-side and remove it locally:
 $ ledgerline-cli auth logout
 Logged out.
 ```
+
+### `auth unlock` / `auth lock`
+
+Cache the vault key so `gallery`, `files` and `todo` don't prompt for the
+passphrase each time:
+
+```sh
+ledgerline-cli auth unlock --remember 24h   # also: 12h, 7d, 4w
+ledgerline-cli auth lock                    # clear the cached key
+```
+
+The key is stored in the OS keychain (or a `0600` file, with a warning, when no
+keychain is available). Logout and a server-side device revoke clear it; any
+revoked/expired token wipes the local credential and cached key on the next call.
 
 ### `gallery upload`
 
@@ -238,6 +271,77 @@ two photos share a name), with its capture time set as the file's modification
 time. Files already present are skipped unless `--force` is given, so the command
 is resumable. Trashed photos are never downloaded.
 
+### `files`
+
+Work with the encrypted Files module. All commands need the vault passphrase.
+
+```sh
+ledgerline-cli files ls       [path] [-R]        # list folders/files (colour + icons)
+ledgerline-cli files download -o /local/dir [--remote SubFolder] [--force]
+ledgerline-cli files upload   -f /local/dir [--remote Target] [--hidden]
+ledgerline-cli files open     <path>             # open with the OS default app
+ledgerline-cli files rm       <path> [-r] [-f]   # trash, or --force to erase
+ledgerline-cli files sync     --map remote:local [--map …] [flags]
+```
+
+`files rm` trashes by default (restore in the web app); `--force` deletes
+permanently and reclaims blobs, and a folder needs `--recursive`.
+
+`files ls` shows a folder's contents colour-coded with a monochrome per-type icon
+(Nerd Font glyphs; use `--icons none` if your terminal font lacks them, and
+`--color never` to disable colour).
+
+**`files sync`** is a two-way sync. It keeps a local sync-state database (in the
+config dir) so it can tell which side changed since the last run.
+
+- **Mappings.** Repeatable `--map remote:local` maps a remote folder to a local
+  directory (e.g. `--map Photos:/home/me/photos --map Docs:/home/me/docs`). A
+  value with no colon maps the **whole store into one folder**
+  (`--map /home/me/ledger`). With no `--map`, the `sync` list from the settings
+  file is used.
+- **Deletions** — `--delete both` (default, propagate both ways) | `additive`
+  (never delete, recreate the missing side) | `to-remote` (local deletes trash
+  remote; remote never deletes local).
+- **Conflicts** (same file changed on both sides) — `--conflict keep-both`
+  (default; the remote copy is saved as `name (conflict …).ext` on both sides) |
+  `newest` | `skip`.
+- `--hidden` includes dotfiles; `--ignore PATTERN` (repeatable) and the settings
+  file's `ignore` list exclude paths (gitignore-style); `--dry-run` previews.
+
+> Two-way sync with deletion propagation can remove files. Start with
+> `--dry-run`, and consider `--delete additive` until you trust a mapping.
+
+### Settings
+
+`settings.json` in the config dir is user-editable and read by `files sync`:
+
+```json
+{
+  "hidden": false,
+  "ignore": ["*.tmp", "node_modules/", ".git/"],
+  "sync": [
+    { "remote": "Photos", "local": "/home/me/photos" },
+    { "remote": "", "local": "/home/me/ledger-all" }
+  ]
+}
+```
+
+### `todo`
+
+Manage encrypted todos and lists.
+
+```sh
+ledgerline-cli todo ls [--list NAME] [--tag T] [--all|--done|--marked|--trash]
+ledgerline-cli todo add "Buy milk" --due 2026-07-20 --priority high --list Home
+ledgerline-cli todo done <id>        # also: undone, mark, unmark, restore
+ledgerline-cli todo edit <id> --title … --due … --list … --priority …
+ledgerline-cli todo rm <id> [--force]
+ledgerline-cli todo lists            # add <name> | rm <name> | rename <old> <new>
+```
+
+Todos are referenced by the short id shown in `todo ls` (a unique prefix is
+enough). `--list` on `add`/`edit` creates the list if it does not exist.
+
 ## How authentication works
 
 The CLI reuses the same server mechanism as the Ledgerline mobile app. The app
@@ -282,16 +386,26 @@ The project layout keeps shared concerns reusable so new commands stay
 consistent:
 
 ```
-cmd/                 command tree (root, status, auth, gallery)
-internal/api/        typed HTTP client for the /api/v1 surface
-internal/crypto/     libsodium-compatible crypto (secretbox, Argon2id, secretstream)
-internal/vault/      passphrase → vault key unlock
-internal/gallery/    manifest v2, upload pipeline, Live Photo pairing, sources
-internal/session/    durable credential storage (keychain + file fallback)
-internal/config/     config-directory resolution
-internal/version/    build metadata and update checks
-internal/ui/         prompts and spinner
+cmd/                  command tree (root, status, auth, gallery, files, todo)
+internal/api/         typed HTTP client for the /api/v1 surface
+internal/crypto/      libsodium-compatible crypto (secretbox, Argon2id, secretstream)
+internal/vault/       passphrase → vault key unlock
+internal/manifeststore/ shared opaque-manifest engine (conflict-safe save, DRY)
+internal/files/       Files module: tree, listing, upload, download, two-way sync
+internal/todo/        Todos module: todos and lists over the shared manifest
+internal/gallery/     manifest v2, upload pipeline, Live Photo pairing, sources
+internal/session/     durable credential storage (keychain + file fallback)
+internal/settings/    user-editable settings file (ignore list, sync mappings)
+internal/config/      config-directory resolution
+internal/version/     build metadata and update checks
+internal/ui/          prompts and spinner
 ```
+
+The Files and Todos modules both live in one sealed *workspace manifest* shared
+with the web client (notes, bookmarks, contacts, …). `internal/manifeststore` is
+the single engine that decrypts it, stages edits as operations, and re-seals with
+optimistic-concurrency retry — always preserving keys owned by other modules
+verbatim — so each module is a thin, consistent wrapper.
 
 The gallery crypto reproduces the web vault (`resources/js/vault.js`) byte for
 byte and is verified against libsodium-generated known-answer tests, so photos

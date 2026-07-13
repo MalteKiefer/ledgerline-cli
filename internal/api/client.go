@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +15,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/MalteKiefer/ledgerline-cli/internal/version"
 )
 
 // DefaultTimeout bounds a single request. Pairing polls are short; uploads set
@@ -60,12 +59,36 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 
 	c := &Client{
 		baseURL:    u,
-		httpClient: &http.Client{Timeout: DefaultTimeout},
+		httpClient: hardenedClient(),
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c, nil
+}
+
+// hardenedClient builds the default HTTP client: TLS 1.2+ and a redirect policy
+// that refuses scheme downgrades and cross-host hops (the API is single-origin,
+// so the bearer and any transient plaintext must never follow a redirect off it).
+func hardenedClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	return &http.Client{
+		Timeout:   DefaultTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return nil
+			}
+			if req.URL.Scheme != "https" && !isLoopback(req.URL.Hostname()) {
+				return errors.New("refusing redirect to a non-https URL")
+			}
+			if req.URL.Host != via[0].URL.Host {
+				return errors.New("refusing cross-host redirect")
+			}
+			return nil
+		},
+	}
 }
 
 // BaseURL returns the normalised server URL the client targets.
@@ -131,7 +154,7 @@ func (c *Client) request(ctx context.Context, method, path string, body, out any
 		reader = bytes.NewReader(buf)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL.String()+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path), reader)
 	if err != nil {
 		return err
 	}
@@ -170,7 +193,10 @@ func (c *Client) endpoint(path string) string { return c.baseURL.String() + path
 func (c *Client) applyAuth(req *http.Request) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("User-Agent", "ledgerline-cli/"+version.Version)
+	// A version-less UA to the server: the exact build is client-side metadata
+	// that would only help fingerprint the user. (The GitHub update check, which
+	// is not the server, still sends the version.)
+	req.Header.Set("User-Agent", "ledgerline-cli")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}

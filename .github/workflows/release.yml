@@ -1,0 +1,65 @@
+name: Release
+
+# On every version tag (vMAJOR.MINOR.PATCH) this workflow verifies the code,
+# cross-compiles the Linux and macOS binaries, generates SHA-256 checksums and
+# publishes a GitHub release with the CHANGELOG section as the notes.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` stamps the exact version.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Verify (vet, gofmt, tests)
+        run: make check
+
+      - name: Cross-compile release binaries
+        run: make release
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum ledgerline-cli-* > checksums.txt
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { flag = 1; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            printf 'Release %s\n' "$TAG" > release-notes.md
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            dist/ledgerline-cli-* dist/checksums.txt

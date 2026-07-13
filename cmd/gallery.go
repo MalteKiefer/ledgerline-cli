@@ -19,9 +19,9 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/vault"
 )
 
-// saveEvery bounds how many photos are uploaded before the manifest is flushed,
-// so an interrupted run keeps most of its progress.
-const saveEvery = 50
+// defaultBatch is how many photos are uploaded before the manifest is flushed
+// (and, with --delete, verified local files removed) when --batch is not set.
+const defaultBatch = 50
 
 // newGalleryCommand builds the `gallery` group.
 func newGalleryCommand() *cobra.Command {
@@ -70,6 +70,7 @@ func newGalleryUploadCommand() *cobra.Command {
 	f.StringVarP(&opts.zipPath, "zip", "z", "", "path to the Google Photos export .zip")
 	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings inline (needs the server ML service)")
 	f.BoolVarP(&opts.deleteLocal, "delete", "d", false, "delete each local file after its upload is saved and verified")
+	f.IntVar(&opts.batch, "batch", defaultBatch, "save (and, with --delete, delete verified files) after this many uploads")
 	return cmd
 }
 
@@ -81,6 +82,7 @@ type uploadOptions struct {
 	zipPath     string
 	withML      bool
 	deleteLocal bool
+	batch       int
 }
 
 // runUpload authenticates, unlocks the vault, collects the items and runs the
@@ -121,15 +123,27 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	uploader := gallery.NewUploader(client, store, vk, opts.withML)
 	fmt.Fprintf(out, "Uploading %d item(s)%s…\n", len(items), mlNote(opts.withML))
 
+	if reportSync(ctx, client, "syncing", "gallery") {
+		return wipedError()
+	}
+	defer reportSync(context.WithoutCancel(ctx), client, "idle", "")
+
+	batch := opts.batch
+	if batch < 1 {
+		batch = defaultBatch
+	}
 	run := &uploadRun{out: out, opts: opts, ctx: ctx, store: store, uploader: uploader}
 	for i, item := range items {
 		if ctx.Err() != nil {
 			break
 		}
 		run.one(i, len(items), item)
-		if run.sinceSave >= saveEvery {
+		if run.sinceSave >= batch {
 			if err := run.flush(); err != nil {
 				return err
+			}
+			if reportSync(ctx, client, "syncing", "gallery") {
+				return wipedError()
 			}
 		}
 	}
@@ -271,17 +285,55 @@ func authedClient(ctx context.Context) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := client.Me(ctx); err != nil {
+	_, _, wipe, err := client.Me(ctx)
+	if err != nil {
 		if api.Status(err) == 401 {
-			return nil, errors.New("session expired; run 'ledgerline-cli auth login' again")
+			// The device was revoked from the web or the token expired. Wipe the
+			// local credential AND any cached vault key so nothing stale lingers.
+			_ = session.Clear()
+			return nil, errors.New("this device was revoked or the session expired; local credential and cached key cleared — run 'ledgerline-cli auth login'")
 		}
 		return nil, err
+	}
+	if wipe {
+		// Remote kill switch: the owner asked to wipe this client. Erase all local
+		// state and stop.
+		_ = session.WipeLocal()
+		return nil, errors.New("this client was wiped remotely from the web; all local data was erased")
 	}
 	return client, nil
 }
 
-// unlockVault prompts for the passphrase (never echoed) and derives the vault key.
+// reportSync sends a best-effort heartbeat (so the web shows sync activity) and
+// returns whether a remote wipe is now pending. Errors are ignored — a heartbeat
+// must never break an operation.
+func reportSync(ctx context.Context, client *api.Client, state, detail string) (wipe bool) {
+	w, err := client.Heartbeat(ctx, state, detail)
+	if err != nil {
+		return false
+	}
+	return w
+}
+
+// wipedError erases all local state (remote kill switch) and returns the error to
+// stop the current command.
+func wipedError() error {
+	_ = session.WipeLocal()
+	return errors.New("this client was wiped remotely from the web; all local data was erased")
+}
+
+// unlockVault yields the vault key: it uses a valid cached key (no prompt) if one
+// exists, otherwise prompts for the passphrase.
 func unlockVault(cmd *cobra.Command, client *api.Client) ([]byte, error) {
+	if vk, _, err := session.LoadVaultKey(); err == nil {
+		return vk, nil
+	}
+	return unlockVaultPrompt(cmd, client)
+}
+
+// unlockVaultPrompt always prompts for the passphrase (never echoed) and derives
+// the vault key, ignoring any cache.
+func unlockVaultPrompt(cmd *cobra.Command, client *api.Client) ([]byte, error) {
 	out := cmd.OutOrStdout()
 	fmt.Fprint(out, "Vault passphrase: ")
 	pass, err := readPassword(cmd.InOrStdin())

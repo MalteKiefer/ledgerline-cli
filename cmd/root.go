@@ -33,6 +33,8 @@ func NewRootCommand() *cobra.Command {
 		newStatusCommand(),
 		newAuthCommand(),
 		newGalleryCommand(),
+		newFilesCommand(),
+		newTodoCommand(),
 	)
 	return root
 }

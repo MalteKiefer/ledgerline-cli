@@ -57,58 +57,12 @@ func (c *Client) SaveGalleryStore(ctx context.Context, ciphertext string, versio
 // UploadGalleryBlob uploads opaque blob bytes (already encrypted + padded) and
 // returns the server-assigned blob id.
 func (c *Client) UploadGalleryBlob(ctx context.Context, data []byte) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, uploadTimeout)
-	defer cancel()
-
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
-	part, err := w.CreateFormFile("file", "blob.enc")
-	if err != nil {
-		return "", err
-	}
-	if _, err := part.Write(data); err != nil {
-		return "", err
-	}
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint("/api/v1/gallery/upload"), &buf)
-	if err != nil {
-		return "", err
-	}
-	c.applyAuth(req)
-	req.Header.Set("Content-Type", w.FormDataContentType())
-
-	var out struct {
-		ID string `json:"id"`
-	}
-	if err := c.do(req, &out); err != nil {
-		return "", err
-	}
-	return out.ID, nil
+	return c.uploadBlob(ctx, "/api/v1/gallery/upload", data)
 }
 
 // GetGalleryBlob downloads an opaque blob's bytes (still encrypted).
 func (c *Client) GetGalleryBlob(ctx context.Context, id string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, uploadTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint("/api/v1/gallery/raw/"+id), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.applyAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, decodeError(resp)
-	}
-	return io.ReadAll(resp.Body)
+	return c.getBlob(ctx, "/api/v1/gallery/raw/"+id)
 }
 
 // ProcessFace is one detected face in a ProcessResult.

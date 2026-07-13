@@ -18,10 +18,12 @@
 package session
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/zalando/go-keyring"
 
@@ -61,20 +63,33 @@ type Session struct {
 	Backend Backend `json:"backend"`
 }
 
-// diskState is the on-disk shape of config.json. tokenField is populated only in
-// the file-fallback backend.
+// diskState is the on-disk shape of config.json. Token is populated only in the
+// file-fallback backend; VaultKey likewise only in the file fallback.
 type diskState struct {
-	ServerURL string  `json:"server_url"`
-	UserID    int64   `json:"user_id"`
-	UserName  string  `json:"user_name"`
-	UserEmail string  `json:"user_email"`
-	Backend   Backend `json:"backend"`
-	Token     string  `json:"token,omitempty"`
+	ServerURL    string  `json:"server_url"`
+	UserID       int64   `json:"user_id"`
+	UserName     string  `json:"user_name"`
+	UserEmail    string  `json:"user_email"`
+	Backend      Backend `json:"backend"`
+	Token        string  `json:"token,omitempty"`
+	VaultKey     string  `json:"vault_key,omitempty"`     // cached VK (file backend only)
+	VaultExpires int64   `json:"vault_expires,omitempty"` // unix; 0 = no cached VK
 }
 
 // keyringUser derives the keychain account name from the server URL so multiple
 // servers can be stored side by side without collision.
 func keyringUser(serverURL string) string { return serverURL }
+
+// vaultKeyringUser is the keychain account for a cached vault key (kept distinct
+// from the token account).
+func vaultKeyringUser(serverURL string) string { return "vault:" + serverURL }
+
+// ErrNoVaultKey means no valid cached vault key is available (absent or expired).
+var ErrNoVaultKey = errors.New("no cached vault key")
+
+// ErrNoKeychainForVaultKey means the vault key cannot be cached because no OS
+// keychain is available (caching to a file would store the master key plaintext).
+var ErrNoKeychainForVaultKey = errors.New("cannot cache the vault key without an OS keychain")
 
 // Save persists s, writing the token to the OS keychain when possible and
 // otherwise to the 0600 config file. It records the backend actually used on the
@@ -160,16 +175,115 @@ func Clear() error {
 
 	path := filepath.Join(dir, fileName)
 	if state, err := readState(path); err == nil {
-		if state.Backend != BackendFile {
-			// Best-effort: a missing keychain entry is fine.
-			_ = keyring.Delete(keyringService, keyringUser(state.ServerURL))
-		}
+		// Best-effort: delete BOTH keychain entries regardless of the recorded
+		// backend, so a secret can never be orphaned if the backend field is
+		// stale or the session was migrated. A missing entry is not an error.
+		_ = keyring.Delete(keyringService, keyringUser(state.ServerURL))
+		_ = keyring.Delete(keyringService, vaultKeyringUser(state.ServerURL))
 	}
 
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
+}
+
+// WipeLocal erases all local state: the credential and cached vault key (keychain
+// + config), plus everything else in the config directory (sync state, settings).
+// Used by the remote kill switch.
+func WipeLocal() error {
+	// Clear() first so it can read the state to delete the right keychain entries.
+	_ = Clear()
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+// SaveVaultKey caches the unlocked vault key until expires, so decrypting
+// commands need not re-prompt for the passphrase within the window. It is stored
+// in the OS keychain when the token is, and otherwise inline in the 0600 config
+// file. Backend() reports which; a file-backend cache is plaintext at rest.
+func SaveVaultKey(vk []byte, expires time.Time) error {
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, fileName)
+	state, err := readState(path)
+	if err != nil {
+		return err // not authenticated
+	}
+
+	// Refuse to cache the vault master key without an OS keychain — writing it to
+	// the config file would be plaintext at rest, defeating the zero-knowledge
+	// guarantee for exactly the headless users who can't avoid it.
+	if state.Backend == BackendFile {
+		return ErrNoKeychainForVaultKey
+	}
+	if err := keyring.Set(keyringService, vaultKeyringUser(state.ServerURL), base64.StdEncoding.EncodeToString(vk)); err != nil {
+		return err
+	}
+	state.VaultKey = ""
+	state.VaultExpires = expires.Unix()
+	return writeState(path, state)
+}
+
+// LoadVaultKey returns the cached vault key and its expiry, or ErrNoVaultKey when
+// none is cached or it has expired (an expired cache is cleared).
+func LoadVaultKey() ([]byte, time.Time, error) {
+	dir, err := config.Dir()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	state, err := readState(filepath.Join(dir, fileName))
+	if err != nil {
+		return nil, time.Time{}, ErrNoVaultKey
+	}
+	if state.VaultExpires == 0 {
+		return nil, time.Time{}, ErrNoVaultKey
+	}
+	expiry := time.Unix(state.VaultExpires, 0)
+	if time.Now().After(expiry) {
+		_ = ClearVaultKey()
+		return nil, time.Time{}, ErrNoVaultKey
+	}
+
+	var b64 string
+	if state.Backend == BackendFile {
+		b64 = state.VaultKey
+	} else {
+		b64, err = keyring.Get(keyringService, vaultKeyringUser(state.ServerURL))
+		if err != nil {
+			return nil, time.Time{}, ErrNoVaultKey
+		}
+	}
+	vk, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(vk) == 0 {
+		return nil, time.Time{}, ErrNoVaultKey
+	}
+	return vk, expiry, nil
+}
+
+// ClearVaultKey removes any cached vault key (keychain + config), keeping the
+// login intact. Idempotent.
+func ClearVaultKey() error {
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, fileName)
+	state, err := readState(path)
+	if err != nil {
+		return nil // nothing stored
+	}
+	if state.Backend != BackendFile {
+		_ = keyring.Delete(keyringService, vaultKeyringUser(state.ServerURL))
+	}
+	state.VaultKey = ""
+	state.VaultExpires = 0
+	return writeState(path, state)
 }
 
 // writeState atomically writes state as pretty JSON with 0600 permissions.
