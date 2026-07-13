@@ -50,11 +50,17 @@ type PhotoRecord struct {
 	Trashed      string   `json:"trashed,omitempty"` // soft-delete timestamp; set = in the trash
 
 	// Session-only bookkeeping (never serialised): the Apple content id used to
-	// merge a Live Photo's still and video halves, and a flag marking a video
-	// record that was merged into a still (so it is not written out).
-	contentID string
-	merged    bool
+	// merge a Live Photo's still and video halves, a flag marking a video record
+	// that was merged into a still (so it is not written out), and a non-fatal
+	// warning if this photo's paired motion clip could not be stored.
+	contentID  string
+	merged     bool
+	motionWarn error
 }
+
+// MotionWarning reports a non-fatal problem storing this photo's paired motion
+// clip (the still itself uploaded fine), or nil if there was none.
+func (r *PhotoRecord) MotionWarning() error { return r.motionWarn }
 
 // metaBlob is the separately-encrypted metadata blob referenced by metaRef. Its
 // shape matches the web's meta object.

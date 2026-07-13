@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  exclusions:
+    presets:
+      # Ignore the well-known safe unchecked errors (fmt.Fprint to stdout,
+      # deferred Close, etc.); real error handling is still checked.
+      - std-error-handling
+    rules:
+      # Test helpers deliberately ignore setup errors for brevity.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # hash.Hash / poly1305.MAC Write never returns an error (documented in the
+      # file); the byte-exact secretstream absorbs into the MAC unconditionally.
+      - path: internal/crypto/secretstream\.go
+        linters:
+          - errcheck

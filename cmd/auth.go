@@ -163,7 +163,7 @@ func runLogin(cmd *cobra.Command, serverFlag, codeFlag, deviceFlag string) error
 		server = v
 	}
 
-	client, err := api.New(server)
+	client, err := newAPIClient(server)
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func runLogin(cmd *cobra.Command, serverFlag, codeFlag, deviceFlag string) error
 	}
 
 	// Step 3 — confirm the token works, then persist the session.
-	authed, err := api.New(server, api.WithToken(result.Token))
+	authed, err := newAPIClient(server, api.WithToken(result.Token))
 	if err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func newAuthLogoutCommand() *cobra.Command {
 			}
 
 			// Best-effort server-side revocation — always clear locally regardless.
-			if client, cerr := api.New(sess.ServerURL, api.WithToken(sess.Token)); cerr == nil {
+			if client, cerr := newAPIClient(sess.ServerURL, api.WithToken(sess.Token)); cerr == nil {
 				ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 				defer cancel()
 				if rerr := client.Logout(ctx); rerr != nil {
@@ -303,7 +303,7 @@ func newAuthStatusCommand() *cobra.Command {
 				return err
 			}
 
-			client, err := api.New(sess.ServerURL, api.WithToken(sess.Token))
+			client, err := newAPIClient(sess.ServerURL, api.WithToken(sess.Token))
 			if err != nil {
 				return err
 			}

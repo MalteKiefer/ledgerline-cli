@@ -88,11 +88,18 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 		FaceCropRefs: []string{},
 	}
 
-	// 2. Paired Live Photo motion clip (folder/zip basename pairing).
+	// 2. Paired Live Photo motion clip (folder/zip basename pairing). A failure
+	// here is non-fatal — the still is already safe — but must not be silent, so
+	// the motion half is not dropped without the user knowing.
 	if item.MotionPath != "" {
 		motionBytes, rerr := readFileCapped(item.MotionPath)
-		if rerr == nil {
-			if ref, key, merr := u.encStore(ctx, motionBytes); merr == nil {
+		switch {
+		case rerr != nil:
+			rec.motionWarn = fmt.Errorf("motion clip unreadable: %w", rerr)
+		default:
+			if ref, key, merr := u.encStore(ctx, motionBytes); merr != nil {
+				rec.motionWarn = fmt.Errorf("motion clip upload failed: %w", merr)
+			} else {
 				rec.MotionRef, rec.MotionKey = ref, key
 			}
 		}

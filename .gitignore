@@ -11,3 +11,11 @@ coverage.txt
 .DS_Store
 .idea/
 .vscode/
+
+# Secrets (defense-in-depth; the CLI keeps credentials in the OS keychain, but
+# never let a stray key or env file be committed)
+.env
+.env.*
+*.pem
+*.key
+*token*
