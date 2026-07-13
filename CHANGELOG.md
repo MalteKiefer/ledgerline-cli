@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Harden the local-ML client (`internal/ml`): the `/predict` response body is now
+  size-bounded (64 MiB) before decoding, renditions whose header declares an
+  implausible pixel count are rejected before `image.Decode` (decompression-bomb
+  guard), non-finite bounding-box coordinates are dropped, and the HTTP client
+  refuses redirects so a decrypted rendition is never replayed to a host the user
+  did not name.
+- `MergeLivePhotos` now takes the store mutex, closing a latent data race on the
+  shared photo records, and `isLoopback` accepts the whole `127.0.0.0/8` / `::1`
+  loopback range (via `net.IP.IsLoopback`) rather than three literals.
+- Release workflow now runs with least-privilege `contents: read` by default,
+  elevating only the release job, and publishes a signed build-provenance
+  attestation for the binaries. CI pins `govulncheck` to a fixed version rather
+  than `@latest`. `.gitignore` gains secret-file patterns as defense-in-depth.
+
+### Fixed
+
+- A paired Live Photo motion clip that fails to read or upload no longer fails
+  silently: the still is still stored, and the per-item warning is printed so the
+  dropped motion half is visible.
+
 ## [0.5.0] - 2026-07-13
 
 ### Changed

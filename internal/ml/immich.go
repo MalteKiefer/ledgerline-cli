@@ -11,9 +11,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -32,6 +34,14 @@ const cropPad = 0.15
 
 // cropJPEGQuality is the quality of the re-encoded face crop.
 const cropJPEGQuality = 90
+
+// maxPredictResponseBytes bounds the /predict JSON so a misbehaving or hostile
+// ML endpoint cannot stream an unbounded body and exhaust memory.
+const maxPredictResponseBytes = 64 << 20 // 64 MiB
+
+// maxImagePixels bounds the decoded rendition (a decompression-bomb guard): the
+// pixel buffer is allocated from the header dimensions before decoding.
+const maxImagePixels = 100 << 20 // 100 megapixels
 
 // Face is one detected face: its detector score, box in analyzed-image pixels
 // ([x1, y1, x2, y2]), recognition embedding, and a cropped JPEG of the face.
@@ -80,7 +90,14 @@ func NewImmich(baseURL, clipModel, faceModel string, minScore float64) (*Immich,
 		clipModel: clipModel,
 		faceModel: faceModel,
 		minScore:  minScore,
-		http:      &http.Client{Timeout: predictTimeout},
+		http: &http.Client{
+			Timeout: predictTimeout,
+			// Refuse redirects: the request carries a decrypted image rendition,
+			// which must not be replayed to a different host the user did not name.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errors.New("refusing redirect from the ML endpoint")
+			},
+		},
 	}, nil
 }
 
@@ -161,14 +178,18 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 		return Result{}, fmt.Errorf("local ML returned status %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPredictResponseBytes))
+	if err != nil {
+		return Result{}, fmt.Errorf("read local ML response: %w", err)
+	}
 	var pr predictResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+	if err := json.Unmarshal(body, &pr); err != nil {
 		return Result{}, fmt.Errorf("decode local ML response: %w", err)
 	}
 
 	res := Result{Embedding: parseEmbedding(pr.Clip)}
 	if len(pr.Faces) > 0 {
-		img, _, derr := image.Decode(bytes.NewReader(jpegData))
+		img, derr := decodeImageBounded(jpegData)
 		if derr != nil {
 			return Result{}, fmt.Errorf("decode image for face crops: %w", derr)
 		}
@@ -178,6 +199,9 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 				continue
 			}
 			bb := f.BoundingBox
+			if !finiteBox(bb.X1, bb.Y1, bb.X2, bb.Y2) {
+				continue
+			}
 			box := []float64{bb.X1, bb.Y1, bb.X2, bb.Y2}
 			crop, cerr := cropFace(img, int(bb.X1), int(bb.Y1), int(bb.X2), int(bb.Y2))
 			if cerr != nil {
@@ -187,6 +211,32 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 		}
 	}
 	return res, nil
+}
+
+// decodeImageBounded decodes a JPEG after rejecting one whose header declares an
+// implausibly large pixel count (a decompression bomb allocates from the header
+// dimensions before the pixels are read).
+func decodeImageBounded(data []byte) (image.Image, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
+		return nil, fmt.Errorf("rendition too large: %dx%d", cfg.Width, cfg.Height)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	return img, err
+}
+
+// finiteBox reports whether every coordinate is a finite number, so a NaN/Inf
+// from the ML endpoint never reaches the integer conversion in cropFace.
+func finiteBox(vals ...float64) bool {
+	for _, v := range vals {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // parseEmbedding decodes an immich-ml embedding. Current builds return a string

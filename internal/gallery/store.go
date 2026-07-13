@@ -219,6 +219,8 @@ func (s *Store) PendingCount() int {
 // unrelated names). The video's original blob becomes the still's motion clip
 // and the video record is dropped. Returns the number of merges performed.
 func (s *Store) MergeLivePhotos() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	stills := map[string]*PhotoRecord{}
 	for _, rec := range s.added {
 		if rec.MediaType != "video" && rec.contentID != "" && rec.MotionRef == "" {

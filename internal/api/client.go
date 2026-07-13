@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -117,11 +118,14 @@ func validateScheme(u *url.URL) error {
 	return fmt.Errorf("server URL must use https (got %q)", u.Scheme)
 }
 
-// isLoopback reports whether host is a local address for which http is tolerated.
+// isLoopback reports whether host is a local address for which http is tolerated
+// (the literal "localhost", or any IP in the loopback ranges 127.0.0.0/8 / ::1).
 func isLoopback(host string) bool {
-	switch host {
-	case "localhost", "127.0.0.1", "::1":
+	if host == "localhost" {
 		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
 	}
 	return false
 }
@@ -250,9 +254,10 @@ func sleepBackoff(ctx context.Context, e *APIError, attempt int) error {
 	if delay > retryMaxDelay {
 		delay = retryMaxDelay
 	}
-	// Full jitter over [delay/2, delay].
+	// Full jitter over [delay/2, delay]. math/rand is deliberate: this only
+	// de-correlates retry timing across workers and is not security-sensitive.
 	half := delay / 2
-	delay = half + time.Duration(rand.Int63n(int64(half)+1))
+	delay = half + time.Duration(rand.Int63n(int64(half)+1)) //#nosec G404 -- non-crypto jitter
 
 	timer := time.NewTimer(delay)
 	defer timer.Stop()

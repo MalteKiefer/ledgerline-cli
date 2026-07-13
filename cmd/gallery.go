@@ -264,6 +264,11 @@ func (r *uploadRun) one(total int, item gallery.Item) {
 		return
 	default:
 		r.record(total, label, "uploaded", &r.uploaded)
+		if rec != nil && rec.MotionWarning() != nil {
+			r.mu.Lock()
+			fmt.Fprintf(r.out, "        %v\n", rec.MotionWarning())
+			r.mu.Unlock()
+		}
 	}
 
 	if r.opts.deleteLocal {

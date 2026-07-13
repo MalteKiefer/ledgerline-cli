@@ -31,5 +31,5 @@ jobs:
 
       - name: Vulnerability scan
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
