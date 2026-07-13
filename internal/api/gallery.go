@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -130,15 +129,20 @@ func (c *Client) ProcessPhoto(ctx context.Context, filename, mime string, data [
 		return ProcessResult{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint("/api/v1/gallery/process"), &buf)
-	if err != nil {
-		return ProcessResult{}, err
-	}
-	c.applyAuth(req)
-	req.Header.Set("Content-Type", w.FormDataContentType())
+	bodyBytes := buf.Bytes()
+	contentType := w.FormDataContentType()
 
 	var out ProcessResult
-	if err := c.do(req, &out); err != nil {
+	err = c.do(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint("/api/v1/gallery/process"), bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, err
+		}
+		c.applyAuth(req)
+		req.Header.Set("Content-Type", contentType)
+		return req, nil
+	}, &out)
+	if err != nil {
 		return ProcessResult{}, err
 	}
 	return out, nil
@@ -147,22 +151,13 @@ func (c *Client) ProcessPhoto(ctx context.Context, filename, mime string, data [
 // boolField renders a Laravel-friendly boolean form value.
 func boolField(b bool) string { return strconv.Itoa(map[bool]int{true: 1, false: 0}[b]) }
 
-// do executes a prepared request and decodes a 2xx JSON body into out.
-func (c *Client) do(req *http.Request, out any) error {
-	resp, err := c.httpClient.Do(req)
+// do runs a request (built by newReq, so its body can be replayed on a retry)
+// through the shared 429/503 backoff and decodes a 2xx JSON body into out.
+func (c *Client) do(ctx context.Context, newReq func() (*http.Request, error), out any) error {
+	resp, err := c.retriableDo(ctx, newReq)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return decodeError(resp)
-	}
-	if out == nil {
-		return nil
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, out)
+	return readJSON(resp, out, 64<<20)
 }

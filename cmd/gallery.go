@@ -176,7 +176,7 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 		if end > len(items) {
 			end = len(items)
 		}
-		run.processBatch(items[start:end], start, len(items), jobs)
+		run.processBatch(items[start:end], len(items), jobs)
 		if err := run.flush(); err != nil {
 			return err
 		}
@@ -209,27 +209,27 @@ type uploadRun struct {
 
 	// mu guards the counters, progress output and pendingDelete list, which the
 	// parallel upload workers update concurrently.
-	mu                                   sync.Mutex
-	uploaded, duplicate, failed, deleted int
-	pendingDelete                        []string // verified files to remove on the next flush
+	mu                                         sync.Mutex
+	done, uploaded, duplicate, failed, deleted int
+	pendingDelete                              []string // verified files to remove on the next flush
 }
 
 // processBatch uploads a batch of items using up to jobs concurrent workers and
 // returns once all of them finish (the barrier before a flush).
-func (r *uploadRun) processBatch(batch []gallery.Item, base, total, jobs int) {
+func (r *uploadRun) processBatch(batch []gallery.Item, total, jobs int) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, jobs)
-	for i, item := range batch {
+	for _, item := range batch {
 		if r.ctx.Err() != nil {
 			break
 		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(idx int, it gallery.Item) {
+		go func(it gallery.Item) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r.one(base+idx, total, it)
-		}(i, item)
+			r.one(total, it)
+		}(item)
 	}
 	wg.Wait()
 }
@@ -238,12 +238,12 @@ func (r *uploadRun) processBatch(batch []gallery.Item, base, total, jobs int) {
 // deletion after the next save. It is safe to call from several workers at once;
 // the slow network steps run unlocked and only the shared counters, output and
 // delete list are guarded.
-func (r *uploadRun) one(idx, total int, item gallery.Item) {
+func (r *uploadRun) one(total int, item gallery.Item) {
 	label := shortPath(item.StillPath)
 
 	plain, rerr := os.ReadFile(item.StillPath)
 	if rerr != nil {
-		r.record(idx, total, label, "skipped: "+rerr.Error(), &r.failed)
+		r.record(total, label, "skipped: "+rerr.Error(), &r.failed)
 		return
 	}
 
@@ -252,18 +252,18 @@ func (r *uploadRun) one(idx, total int, item gallery.Item) {
 	case uerr != nil && (errors.Is(uerr, context.Canceled) || r.ctx.Err() != nil):
 		// Interrupted (Ctrl-C): not a real failure. Staged progress is still
 		// saved on the way out, and a re-run skips what already uploaded.
-		r.record(idx, total, label, "interrupted", nil)
+		r.record(total, label, "interrupted", nil)
 		return
 	case uerr != nil:
-		r.record(idx, total, label, "failed: "+uerr.Error(), &r.failed)
+		r.record(total, label, "failed: "+uerr.Error(), &r.failed)
 		return
 	case outcome == gallery.Duplicate:
 		// Already safely in the gallery — eligible for local cleanup.
-		r.record(idx, total, label, "duplicate, skipped", &r.duplicate)
+		r.record(total, label, "duplicate, skipped", &r.duplicate)
 		r.stageDelete(item)
 		return
 	default:
-		r.record(idx, total, label, "uploaded", &r.uploaded)
+		r.record(total, label, "uploaded", &r.uploaded)
 	}
 
 	if r.opts.deleteLocal {
@@ -278,14 +278,17 @@ func (r *uploadRun) one(idx, total int, item gallery.Item) {
 }
 
 // record prints one progress line and, when counter is non-nil, increments it,
-// holding the lock so counters and output stay consistent across workers.
-func (r *uploadRun) record(idx, total int, label, msg string, counter *int) {
+// holding the lock so counters and output stay consistent across workers. Lines
+// are numbered by a monotonic completion counter, since parallel workers finish
+// out of input order.
+func (r *uploadRun) record(total int, label, msg string, counter *int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.done++
 	if counter != nil {
 		*counter++
 	}
-	fmt.Fprintf(r.out, "  [%d/%d] %s — %s\n", idx+1, total, label, msg)
+	fmt.Fprintf(r.out, "  [%d/%d] %s — %s\n", r.done, total, label, msg)
 }
 
 // verifyForDelete confirms the original (and any motion clip) round-trip from the

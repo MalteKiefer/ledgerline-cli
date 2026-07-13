@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-13
+
+### Fixed
+
+- Rate-limited (`429 Too Many Attempts`) responses no longer abort an upload. A
+  bursty parallel run — many blob uploads plus the `process` and manifest-save
+  calls — can trip the server's rate limit; the API client now retries such
+  responses (and `503`s) with exponential, jittered backoff that honours the
+  server's `Retry-After`, across blob upload/download, `process` and the gallery
+  save. This makes `gallery upload --jobs N` robust at higher concurrency.
+- Progress lines during a parallel upload are numbered by a monotonic completion
+  counter instead of the item's input position, so they read `[1/N] [2/N] …` in
+  the order items finish rather than appearing shuffled.
+
 ## [0.4.0] - 2026-07-13
 
 ### Added
@@ -168,7 +182,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...v0.3.0
