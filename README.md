@@ -26,6 +26,8 @@ collects no telemetry.
   - [`auth logout`](#auth-logout)
   - [`auth unlock` / `auth lock`](#auth-unlock--auth-lock)
   - [`gallery upload`](#gallery-upload)
+    - [Parallel uploads and performance](#parallel-uploads-and-performance)
+    - [Local machine learning (`--ml-local`)](#local-machine-learning---ml-local)
   - [`gallery download`](#gallery-download)
   - [`files`](#files)
   - [Settings](#settings)
@@ -225,7 +227,13 @@ ledgerline-cli gallery upload --google-photos -z /path/to/takeout.zip
 | `-r`, `--recursive` | Include subfolders. |
 | `--google-photos` | Import from a Google Photos (Takeout) export. |
 | `-z`, `--zip` | Path to the Google Photos export `.zip`. |
-| `--ml` | Run face detection + search embeddings inline (needs the server's ML service). Without it, the web client analyses photos later. |
+| `-j`, `--jobs` | Upload this many items in parallel (default 4). See [Parallel uploads](#parallel-uploads-and-performance). |
+| `--ml` | Run face detection + search embeddings on the **server** (needs the server's ML service). Without it, the web client analyses photos later. |
+| `--ml-local` | Run that ML pass on a **local** immich-machine-learning instance at this URL instead of the server. See [Local machine learning](#local-machine-learning---ml-local). Mutually exclusive with `--ml`. |
+| `--ml-clip-model` | CLIP model name for `--ml-local` (default `ViT-B-32__openai`). Must match the server's Smart Search model. |
+| `--ml-face-model` | Face model name for `--ml-local` (default `buffalo_l`). Must match the server's Facial Recognition model. |
+| `--ml-min-score` | Minimum face-detection score for `--ml-local` (default `0.7`). |
+| `--batch` | Save progress (and, with `--delete`, remove verified files) after this many uploads (default 50). |
 | `-d`, `--delete` | Delete each local file **after** its upload is saved and the stored copy has been re-downloaded, decrypted and verified byte-for-byte. |
 
 What it handles, matching the web app:
@@ -247,6 +255,97 @@ What it handles, matching the web app:
 > The gallery is zero-knowledge, so uploads are only reversible from the web app
 > (or by deleting the photo there). `--delete` removes local originals — keep a
 > backup until you have verified a batch.
+
+#### Parallel uploads and performance
+
+Each item is a short pipeline: encrypt + upload the original, ask the server to
+derive thumbnails/EXIF (the transient-plaintext `process` step), then upload the
+derived blobs. Most of the wall-clock time is spent **waiting on the network and
+the server**, not on local CPU, so uploading several items at once is a large
+speed-up for big libraries.
+
+`--jobs N` (default 4) uploads N items concurrently. Progress is still saved in
+batches of `--batch` (default 50): the client uploads a batch in parallel, then
+saves the manifest once at the batch boundary, so a save never races an in-flight
+upload. Increase `--jobs` if your link and server can take it (e.g. `-j 8` for
+an 18k-photo import); lower it on a small server or a metered connection.
+
+```sh
+# Fast bulk import: 8 parallel uploads.
+ledgerline-cli gallery upload -f /photos -r -j 8
+```
+
+Duplicate detection, `--delete` verification and Live Photo pairing all work
+unchanged under parallel upload.
+
+#### Local machine learning (`--ml-local`)
+
+Face detection and CLIP search embeddings are the **most expensive part of an
+upload**. `--ml` runs them on the server's ML service, one photo at a time, which
+dominates the upload time. `--ml-local` moves that work to your own
+[immich-machine-learning](https://immich.app/) instance — a box you can put on a
+GPU and **tune** (models, thresholds) — so the server is only asked for the cheap
+derivations.
+
+```sh
+ledgerline-cli gallery upload -f /photos -r \
+  --ml-local http://localhost:3003 -j 8
+```
+
+**How it works.** For each photo the client asks the server for the fast
+derivations only (thumbnail, medium rendition, EXIF, perceptual hash — no ML). It
+then sends the **medium JPEG rendition** to your local instance's `/predict`
+endpoint, reads back the CLIP embedding and the detected faces (bounding boxes +
+recognition embeddings), crops each face out of the rendition locally, and folds
+all of it into the photo's metadata — exactly the shape a server-ML upload would
+produce. The photo is stored fully analysed (not left for the web client's
+deferred pass). Everything that lands on the server is still **encrypted on your
+machine first**; the local ML instance only ever sees the rendition, on your own
+network.
+
+**Running an instance.** immich publishes a ready-made container:
+
+```sh
+docker run -d --name immich-ml -p 3003:3003 \
+  -v immich-model-cache:/cache \
+  ghcr.io/immich-app/immich-machine-learning:release
+# GPU builds (-cuda, -openvino, …) exist and are what makes tuning worthwhile.
+```
+
+Point `--ml-local` at its base URL (here `http://localhost:3003`). The client
+speaks the immich-ml `/predict` protocol directly:
+
+```http
+POST {ml-local}/predict          (multipart/form-data)
+  entries = {
+    "clip": { "visual": { "modelName": "<--ml-clip-model>" } },
+    "facial-recognition": {
+      "detection":   { "modelName": "<--ml-face-model>",
+                       "options": { "minScore": <--ml-min-score> } },
+      "recognition": { "modelName": "<--ml-face-model>" }
+    }
+  }
+  image   = <the medium JPEG rendition>
+```
+
+**Tuning.** `--ml-clip-model`, `--ml-face-model` and `--ml-min-score` are passed
+straight through, so you can swap in a stronger recognition model, a different
+CLIP model, or a stricter/looser detection threshold and re-run. To analyse only
+one aspect, set the other model to an empty string (`--ml-face-model ""` does CLIP
+only, `--ml-clip-model ""` does faces only).
+
+> **Match the server's models.** Search results and face clusters are only
+> comparable when embeddings come from the same model space. Set
+> `--ml-clip-model` to the server's **Smart Search** model and `--ml-face-model`
+> to its **Facial Recognition** model (defaults `ViT-B-32__openai` and
+> `buffalo_l`). After your first `--ml-local` run, open one of those photos in the
+> web app and confirm the faces and search behave as expected before importing at
+> scale.
+
+> **Compatibility.** The immich-ml `/predict` API is not formally versioned; a
+> future immich-ml release could change it. If a run reports a local-ML error,
+> pin the container to the release these defaults were built against, or fall back
+> to `--ml` (server) or a plain upload (deferred web analysis).
 
 ### `gallery download`
 
@@ -394,6 +493,7 @@ internal/manifeststore/ shared opaque-manifest engine (conflict-safe save, DRY)
 internal/files/       Files module: tree, listing, upload, download, two-way sync
 internal/todo/        Todos module: todos and lists over the shared manifest
 internal/gallery/     manifest v2, upload pipeline, Live Photo pairing, sources
+internal/ml/          local immich-machine-learning client (--ml-local)
 internal/session/     durable credential storage (keychain + file fallback)
 internal/settings/    user-editable settings file (ignore list, sync mappings)
 internal/config/      config-directory resolution

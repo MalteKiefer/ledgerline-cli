@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/gallery"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ml"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/vault"
 )
@@ -22,6 +24,18 @@ import (
 // defaultBatch is how many photos are uploaded before the manifest is flushed
 // (and, with --delete, verified local files removed) when --batch is not set.
 const defaultBatch = 50
+
+// defaultJobs is how many items are uploaded in parallel when --jobs is not set.
+const defaultJobs = 4
+
+// Default immich-machine-learning model names and detection threshold for
+// --ml-local. They must match the server's configured models for cross-client
+// search and face-clustering consistency.
+const (
+	defaultClipModel = "ViT-B-32__openai"
+	defaultFaceModel = "buffalo_l"
+	defaultMinScore  = 0.7
+)
 
 // newGalleryCommand builds the `gallery` group.
 func newGalleryCommand() *cobra.Command {
@@ -56,7 +70,7 @@ func newGalleryUploadCommand() *cobra.Command {
 			"byte against the local file.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := validateUploadFlags(opts.folder, opts.zipPath, opts.googlePhoto); err != nil {
+			if err := validateUploadFlags(opts); err != nil {
 				return err
 			}
 			return runUpload(cmd, opts)
@@ -68,9 +82,14 @@ func newGalleryUploadCommand() *cobra.Command {
 	f.BoolVarP(&opts.recursive, "recursive", "r", false, "include images in subfolders")
 	f.BoolVar(&opts.googlePhoto, "google-photos", false, "import from a Google Photos (Takeout) export")
 	f.StringVarP(&opts.zipPath, "zip", "z", "", "path to the Google Photos export .zip")
-	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings inline (needs the server ML service)")
+	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings on the server (needs the server ML service)")
+	f.StringVar(&opts.mlLocalURL, "ml-local", "", "run ML on a local immich-machine-learning instance at this URL instead of the server")
+	f.StringVar(&opts.mlClipModel, "ml-clip-model", defaultClipModel, "CLIP model name for --ml-local (must match the server's Smart Search model)")
+	f.StringVar(&opts.mlFaceModel, "ml-face-model", defaultFaceModel, "face model name for --ml-local (must match the server's Facial Recognition model)")
+	f.Float64Var(&opts.mlMinScore, "ml-min-score", defaultMinScore, "minimum face-detection score for --ml-local")
 	f.BoolVarP(&opts.deleteLocal, "delete", "d", false, "delete each local file after its upload is saved and verified")
 	f.IntVar(&opts.batch, "batch", defaultBatch, "save (and, with --delete, delete verified files) after this many uploads")
+	f.IntVarP(&opts.jobs, "jobs", "j", defaultJobs, "number of items to upload in parallel")
 	return cmd
 }
 
@@ -81,8 +100,13 @@ type uploadOptions struct {
 	googlePhoto bool
 	zipPath     string
 	withML      bool
+	mlLocalURL  string
+	mlClipModel string
+	mlFaceModel string
+	mlMinScore  float64
 	deleteLocal bool
 	batch       int
+	jobs        int
 }
 
 // runUpload authenticates, unlocks the vault, collects the items and runs the
@@ -120,8 +144,16 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 		return err
 	}
 
-	uploader := gallery.NewUploader(client, store, vk, opts.withML)
-	fmt.Fprintf(out, "Uploading %d item(s)%s…\n", len(items), mlNote(opts.withML))
+	analyzer, err := buildAnalyzer(opts)
+	if err != nil {
+		return err
+	}
+	uploader := gallery.NewUploader(client, store, vk, opts.withML, analyzer)
+	jobs := opts.jobs
+	if jobs < 1 {
+		jobs = defaultJobs
+	}
+	fmt.Fprintf(out, "Uploading %d item(s)%s, %d in parallel…\n", len(items), mlNote(opts), jobs)
 
 	if reportSync(ctx, client, "syncing", "gallery") {
 		return wipedError()
@@ -133,18 +165,23 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 		batch = defaultBatch
 	}
 	run := &uploadRun{out: out, opts: opts, ctx: ctx, store: store, uploader: uploader}
-	for i, item := range items {
+	// Process the work in batches; within each batch, upload up to `jobs` items
+	// concurrently, then flush (save + optional delete) at the batch barrier so a
+	// manifest save never races an in-flight upload.
+	for start := 0; start < len(items); start += batch {
 		if ctx.Err() != nil {
 			break
 		}
-		run.one(i, len(items), item)
-		if run.sinceSave >= batch {
-			if err := run.flush(); err != nil {
-				return err
-			}
-			if reportSync(ctx, client, "syncing", "gallery") {
-				return wipedError()
-			}
+		end := start + batch
+		if end > len(items) {
+			end = len(items)
+		}
+		run.processBatch(items[start:end], start, len(items), jobs)
+		if err := run.flush(); err != nil {
+			return err
+		}
+		if reportSync(ctx, client, "syncing", "gallery") {
+			return wipedError()
 		}
 	}
 
@@ -170,20 +207,43 @@ type uploadRun struct {
 	store    *gallery.Store
 	uploader *gallery.Uploader
 
-	uploaded, duplicate, failed, deleted, sinceSave int
-	pendingDelete                                   []string // verified files to remove on the next flush
+	// mu guards the counters, progress output and pendingDelete list, which the
+	// parallel upload workers update concurrently.
+	mu                                   sync.Mutex
+	uploaded, duplicate, failed, deleted int
+	pendingDelete                        []string // verified files to remove on the next flush
+}
+
+// processBatch uploads a batch of items using up to jobs concurrent workers and
+// returns once all of them finish (the barrier before a flush).
+func (r *uploadRun) processBatch(batch []gallery.Item, base, total, jobs int) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, jobs)
+	for i, item := range batch {
+		if r.ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, it gallery.Item) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			r.one(base+idx, total, it)
+		}(i, item)
+	}
+	wg.Wait()
 }
 
 // one processes a single item: upload, and (with --delete) verify + stage for
-// deletion after the next save.
+// deletion after the next save. It is safe to call from several workers at once;
+// the slow network steps run unlocked and only the shared counters, output and
+// delete list are guarded.
 func (r *uploadRun) one(idx, total int, item gallery.Item) {
-	w := r.out
 	label := shortPath(item.StillPath)
 
 	plain, rerr := os.ReadFile(item.StillPath)
 	if rerr != nil {
-		r.failed++
-		fmt.Fprintf(w, "  [%d/%d] %s — skipped: %v\n", idx+1, total, label, rerr)
+		r.record(idx, total, label, "skipped: "+rerr.Error(), &r.failed)
 		return
 	}
 
@@ -192,31 +252,40 @@ func (r *uploadRun) one(idx, total int, item gallery.Item) {
 	case uerr != nil && (errors.Is(uerr, context.Canceled) || r.ctx.Err() != nil):
 		// Interrupted (Ctrl-C): not a real failure. Staged progress is still
 		// saved on the way out, and a re-run skips what already uploaded.
-		fmt.Fprintf(w, "  [%d/%d] %s — interrupted\n", idx+1, total, label)
+		r.record(idx, total, label, "interrupted", nil)
 		return
 	case uerr != nil:
-		r.failed++
-		fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", idx+1, total, label, uerr)
+		r.record(idx, total, label, "failed: "+uerr.Error(), &r.failed)
 		return
 	case outcome == gallery.Duplicate:
-		r.duplicate++
-		fmt.Fprintf(w, "  [%d/%d] %s — duplicate, skipped\n", idx+1, total, label)
 		// Already safely in the gallery — eligible for local cleanup.
+		r.record(idx, total, label, "duplicate, skipped", &r.duplicate)
 		r.stageDelete(item)
 		return
 	default:
-		r.uploaded++
-		r.sinceSave++
-		fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", idx+1, total, label)
+		r.record(idx, total, label, "uploaded", &r.uploaded)
 	}
 
 	if r.opts.deleteLocal {
 		if err := r.verifyForDelete(item, rec, plain); err != nil {
-			fmt.Fprintf(w, "        keeping local file — %v\n", err)
+			r.mu.Lock()
+			fmt.Fprintf(r.out, "        keeping local file — %v\n", err)
+			r.mu.Unlock()
 			return
 		}
 		r.stageDelete(item)
 	}
+}
+
+// record prints one progress line and, when counter is non-nil, increments it,
+// holding the lock so counters and output stay consistent across workers.
+func (r *uploadRun) record(idx, total int, label, msg string, counter *int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if counter != nil {
+		*counter++
+	}
+	fmt.Fprintf(r.out, "  [%d/%d] %s — %s\n", idx+1, total, label, msg)
 }
 
 // verifyForDelete confirms the original (and any motion clip) round-trip from the
@@ -242,6 +311,8 @@ func (r *uploadRun) stageDelete(item gallery.Item) {
 	if !r.opts.deleteLocal {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.pendingDelete = append(r.pendingDelete, item.StillPath)
 	if item.MotionPath != "" {
 		r.pendingDelete = append(r.pendingDelete, item.MotionPath)
@@ -258,7 +329,6 @@ func (r *uploadRun) flush() error {
 			return fmt.Errorf("save gallery: %w", err)
 		}
 	}
-	r.sinceSave = 0
 
 	for _, path := range r.pendingDelete {
 		if err := os.Remove(path); err != nil {
@@ -387,32 +457,53 @@ func collectItems(opts uploadOptions) ([]gallery.Item, func(), error) {
 	return items, nil, err
 }
 
-// validateUploadFlags enforces that exactly one coherent mode is selected.
-func validateUploadFlags(folder, zipPath string, googlePhoto bool) error {
+// validateUploadFlags enforces that exactly one coherent source mode is selected
+// and that the ML options are consistent.
+func validateUploadFlags(opts uploadOptions) error {
 	switch {
-	case googlePhoto:
-		if zipPath == "" {
+	case opts.googlePhoto:
+		if opts.zipPath == "" {
 			return errors.New("--google-photos requires --zip/-z pointing to the export .zip")
 		}
-		if folder != "" {
+		if opts.folder != "" {
 			return errors.New("--folder cannot be combined with --google-photos")
 		}
-	case folder != "":
-		if zipPath != "" {
+	case opts.folder != "":
+		if opts.zipPath != "" {
 			return errors.New("--zip is only valid with --google-photos")
 		}
 	default:
 		return errors.New("choose a source: --folder/-f, or --google-photos with --zip/-z")
 	}
+
+	if opts.withML && opts.mlLocalURL != "" {
+		return errors.New("choose one ML mode: --ml (server) or --ml-local (local instance), not both")
+	}
+	if opts.jobs < 1 {
+		return errors.New("--jobs must be at least 1")
+	}
 	return nil
 }
 
 // mlNote annotates the run header with the ML mode.
-func mlNote(withML bool) string {
-	if withML {
-		return " (with face detection + embeddings)"
+func mlNote(opts uploadOptions) string {
+	switch {
+	case opts.mlLocalURL != "":
+		return " (face detection + embeddings on a local ML instance)"
+	case opts.withML:
+		return " (server face detection + embeddings)"
+	default:
+		return ""
 	}
-	return ""
+}
+
+// buildAnalyzer returns a local ML analyzer when --ml-local is set, or nil for
+// the server-ML or no-ML modes.
+func buildAnalyzer(opts uploadOptions) (ml.Analyzer, error) {
+	if opts.mlLocalURL == "" {
+		return nil, nil
+	}
+	return ml.NewImmich(opts.mlLocalURL, opts.mlClipModel, opts.mlFaceModel, opts.mlMinScore)
 }
 
 // deletedNote appends a deletion count when --delete was used.

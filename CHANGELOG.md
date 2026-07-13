@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-13
+
+### Added
+
+- Parallel gallery uploads: `gallery upload --jobs N` (`-j`, default 4) uploads N
+  items concurrently. Since most of an upload is spent waiting on the network and
+  the server's transform step, this is a large speed-up for big libraries. The
+  manifest is still saved once per `--batch` at a barrier, so a save never races
+  an in-flight upload; duplicate detection, `--delete` verification and Live Photo
+  pairing are unchanged.
+- `gallery upload --ml-local <url>` runs the CLIP-embedding and face-detection
+  pass on a local [immich-machine-learning](https://immich.app/) instance instead
+  of the server, offloading the most expensive part of an upload to a box you can
+  put on a GPU and tune. The client asks the server only for the cheap
+  derivations, sends the medium rendition to the local instance's `/predict`
+  endpoint, crops faces locally and folds the results into the photo's metadata
+  exactly as a server-ML upload would; blobs are still encrypted on the client
+  first. Tunable via `--ml-clip-model`, `--ml-face-model` and `--ml-min-score`
+  (which must match the server's configured models for cross-client consistency).
+  `--ml` and `--ml-local` are mutually exclusive.
+- `internal/ml` package: a client for the immich-machine-learning `/predict` API.
+
+### Changed
+
+- The gallery `Store` is now safe for concurrent uploads (its added-record list
+  and signature index are mutex-guarded); a new race test covers the parallel
+  path.
+
 ## [0.3.1] - 2026-07-13
 
 ### Security
@@ -140,7 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.1.0...v0.2.0
