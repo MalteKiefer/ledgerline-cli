@@ -52,6 +52,10 @@ check: test
 	go vet ./...
 	@test -z "$$(gofmt -l . )" || (echo "gofmt needed on:" && gofmt -l . && exit 1)
 
+.PHONY: lint
+lint:
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
+
 .PHONY: clean
 clean:
 	rm -rf bin dist

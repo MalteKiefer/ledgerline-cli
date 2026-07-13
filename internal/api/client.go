@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -33,12 +34,21 @@ const (
 	retryMaxDelay  = 30 * time.Second
 )
 
+// CertPinner records and verifies a server's certificate public-key hash across
+// connections (trust-on-first-use). Check is given the leaf certificate's
+// SubjectPublicKeyInfo SHA-256 and returns an error to abort the connection on a
+// pin mismatch.
+type CertPinner interface {
+	Check(host string, spkiSHA256 []byte) error
+}
+
 // Client talks to one Ledgerline server. It is safe for sequential use; create
 // one per command invocation.
 type Client struct {
 	baseURL    *url.URL
 	token      string
 	httpClient *http.Client
+	pinner     CertPinner
 }
 
 // Option customises a Client.
@@ -49,9 +59,16 @@ func WithToken(token string) Option {
 	return func(c *Client) { c.token = token }
 }
 
-// WithHTTPClient overrides the underlying HTTP client (used by tests).
+// WithHTTPClient overrides the underlying HTTP client (used by tests). It also
+// disables certificate pinning, since the caller supplies its own transport.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) { c.httpClient = h }
+}
+
+// WithCertPinner enables TOFU certificate pinning against p for https, non-
+// loopback servers.
+func WithCertPinner(p CertPinner) Option {
+	return func(c *Client) { c.pinner = p }
 }
 
 // New builds a client for baseURL. The URL must be absolute and use https,
@@ -69,14 +86,35 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 
-	c := &Client{
-		baseURL:    u,
-		httpClient: hardenedClient(),
-	}
+	c := &Client{baseURL: u}
 	for _, opt := range opts {
 		opt(c)
 	}
+	if c.httpClient == nil {
+		c.httpClient = hardenedClient()
+		// Pin the certificate for real (https, non-loopback) servers only.
+		if c.pinner != nil && u.Scheme == "https" && !isLoopback(u.Hostname()) {
+			installPinning(c.httpClient, u.Host, c.pinner)
+		}
+	}
 	return c, nil
+}
+
+// installPinning adds a VerifyConnection hook that checks the leaf certificate's
+// public-key hash against the pinner. It runs in addition to normal CA chain
+// verification (InsecureSkipVerify stays false), so it only ever tightens trust.
+func installPinning(hc *http.Client, host string, p CertPinner) {
+	tr, ok := hc.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		return
+	}
+	tr.TLSClientConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return errors.New("tls: server presented no certificate")
+		}
+		sum := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
+		return p.Check(host, sum[:])
+	}
 }
 
 // hardenedClient builds the default HTTP client: TLS 1.2+ and a redirect policy

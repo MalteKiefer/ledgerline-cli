@@ -29,6 +29,11 @@ jobs:
       - name: Verify (vet, gofmt, tests)
         run: make check
 
+      - name: Lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
       - name: Vulnerability scan
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4

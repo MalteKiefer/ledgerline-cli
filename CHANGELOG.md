@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-13
+
+### Added
+
+- Trust-on-first-use (TOFU) certificate pinning for the API server: the first
+  connection to an https server records its certificate's public-key hash (in
+  `pins.json` in the config dir, `0600`), and a later connection whose key
+  differs is refused with a message pointing at the file to remove if the change
+  is expected. This runs on top of normal CA validation (defence-in-depth against
+  a mis-issued or swapped certificate) and is skipped for loopback/http.
+
 ### Security
 
 - Harden the local-ML client (`internal/ml`): the `/predict` response body is now
@@ -20,8 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loopback range (via `net.IP.IsLoopback`) rather than three literals.
 - Release workflow now runs with least-privilege `contents: read` by default,
   elevating only the release job, and publishes a signed build-provenance
-  attestation for the binaries. CI pins `govulncheck` to a fixed version rather
-  than `@latest`. `.gitignore` gains secret-file patterns as defense-in-depth.
+  attestation plus a keyless (cosign) signature over the checksums. CI pins
+  `govulncheck` to a fixed version rather than `@latest`. `.gitignore` gains
+  secret-file patterns as defense-in-depth.
+
+### Changed
+
+- Added a `golangci-lint` gate to CI (and a `make lint` target) with a
+  configuration that keeps the tree clean; removed an unreachable image-crop
+  fallback branch in the ML client.
 
 ### Fixed
 
@@ -217,7 +235,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform build tooling producing Linux and macOS binaries with embedded
   version metadata.
 
-[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MalteKiefer/ledgerline-cli/compare/v0.3.0...v0.3.1

@@ -359,7 +359,7 @@ func authedClient(ctx context.Context) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := api.New(sess.ServerURL, api.WithToken(sess.Token))
+	client, err := newAPIClient(sess.ServerURL, api.WithToken(sess.Token))
 	if err != nil {
 		return nil, err
 	}

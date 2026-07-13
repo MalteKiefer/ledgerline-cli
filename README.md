@@ -460,9 +460,16 @@ time from the web profile's device list, or with `auth logout`.
 
 ## Security notes
 
-- **Transport:** HTTPS is required for all remote servers. Plain HTTP is accepted
-  only for loopback hosts (`localhost`, `127.0.0.1`, `::1`) to ease local
-  development.
+- **Transport:** HTTPS is required for all remote servers, with TLS 1.2 as the
+  floor. Plain HTTP is accepted only for loopback hosts (`localhost` and the
+  `127.0.0.0/8` / `::1` ranges) to ease local development.
+- **Certificate pinning (TOFU):** the first time the CLI connects to an https
+  server it records that server certificate's public-key hash in `pins.json`
+  (in the config directory, `0600`). Later connections whose key differs are
+  refused — defence-in-depth against a mis-issued or swapped certificate on top
+  of normal CA validation. If your server certificate legitimately changes (for
+  example a new key on renewal), the error names the `pins.json` path; remove the
+  entry (or the file) to trust the new certificate. Loopback/http is not pinned.
 - **Token storage:** the bearer is stored in the OS keychain (macOS Keychain via
   the Security framework; Linux Secret Service over D-Bus). When no keychain is
   available — for example a headless server or an SSH session without a session
@@ -478,6 +485,7 @@ time from the web profile's device list, or with `auth logout`.
 ```sh
 make test    # run the test suite
 make check   # vet + gofmt verification + tests
+make lint    # golangci-lint (also run in CI)
 make build   # host binary into ./bin
 ```
 
@@ -496,6 +504,7 @@ internal/gallery/     manifest v2, upload pipeline, Live Photo pairing, sources
 internal/ml/          local immich-machine-learning client (--ml-local)
 internal/session/     durable credential storage (keychain + file fallback)
 internal/settings/    user-editable settings file (ignore list, sync mappings)
+internal/certpin/     trust-on-first-use certificate pinning
 internal/config/      config-directory resolution
 internal/version/     build metadata and update checks
 internal/ui/          prompts and spinner

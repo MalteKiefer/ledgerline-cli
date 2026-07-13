@@ -301,25 +301,17 @@ func cropFace(img image.Image, x1, y1, x2, y2 int) ([]byte, error) {
 		return nil, fmt.Errorf("degenerate face box")
 	}
 
-	rect := image.Rect(x1, y1, x2, y2)
+	// Every image the standard JPEG decoder produces supports SubImage, giving a
+	// zero-copy crop.
 	sub, ok := img.(interface {
 		SubImage(r image.Rectangle) image.Image
 	})
-	var out image.Image
-	if ok {
-		out = sub.SubImage(rect)
-	} else {
-		dst := image.NewRGBA(rect)
-		for y := rect.Min.Y; y < rect.Max.Y; y++ {
-			for x := rect.Min.X; x < rect.Max.X; x++ {
-				dst.Set(x, y, img.At(x, y))
-			}
-		}
-		out = dst
+	if !ok {
+		return nil, fmt.Errorf("image type does not support cropping")
 	}
 
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: cropJPEGQuality}); err != nil {
+	if err := jpeg.Encode(&buf, sub.SubImage(image.Rect(x1, y1, x2, y2)), &jpeg.Options{Quality: cropJPEGQuality}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

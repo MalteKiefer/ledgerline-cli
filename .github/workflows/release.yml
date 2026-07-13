@@ -49,6 +49,16 @@ jobs:
         with:
           subject-path: dist/ledgerline-cli-*
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksums (keyless)
+        working-directory: dist
+        run: |
+          cosign sign-blob --yes checksums.txt \
+            --output-signature checksums.txt.sig \
+            --output-certificate checksums.txt.pem
+
       - name: Extract release notes from CHANGELOG
         env:
           TAG: ${{ github.ref_name }}
@@ -72,4 +82,5 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md \
             --verify-tag \
-            dist/ledgerline-cli-* dist/checksums.txt
+            dist/ledgerline-cli-* dist/checksums.txt \
+            dist/checksums.txt.sig dist/checksums.txt.pem
