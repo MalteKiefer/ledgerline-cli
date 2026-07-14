@@ -398,6 +398,68 @@ func TestDownloadPlanDisambiguatesNames(t *testing.T) {
 	}
 }
 
+// addBlob encrypts plaintext to the vault key and injects it under a fixed id,
+// returning the ref/key a record would carry.
+func (m *mockServer) addBlob(t *testing.T, plaintext []byte) (ref, key string) {
+	t.Helper()
+	blob, encKey, err := crypto.EncryptContent(plaintext, m.vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.nextID++
+	ref = "inj-" + itoa(m.nextID)
+	m.blobs[ref] = blob
+	m.mu.Unlock()
+	return ref, encKey
+}
+
+func TestFetchMotionAndMeta(t *testing.T) {
+	const pass = "pw"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+
+	motionRef, motionKey := m.addBlob(t, []byte("MOTION-VIDEO-BYTES"))
+	metaRef, metaKey := m.addBlob(t, []byte(`{"content_id":"11112222-3333-4444-5555-666677778888"}`))
+
+	rec := PhotoRecord{
+		MotionRef: motionRef, MotionKey: motionKey,
+		MetaRef: metaRef, MetaKey: metaKey,
+	}
+
+	motion, err := FetchMotion(ctx, client, m.vk, rec)
+	if err != nil {
+		t.Fatalf("FetchMotion: %v", err)
+	}
+	if string(motion) != "MOTION-VIDEO-BYTES" {
+		t.Fatalf("motion bytes = %q", motion)
+	}
+
+	cid, err := FetchMeta(ctx, client, m.vk, rec)
+	if err != nil {
+		t.Fatalf("FetchMeta: %v", err)
+	}
+	if cid != "11112222-3333-4444-5555-666677778888" {
+		t.Fatalf("content id = %q", cid)
+	}
+}
+
+func TestFetchMetaNoContentID(t *testing.T) {
+	const pass = "pw"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	metaRef, metaKey := m.addBlob(t, []byte(`{"content_id":null}`))
+	cid, err := FetchMeta(context.Background(), client, m.vk,
+		PhotoRecord{MetaRef: metaRef, MetaKey: metaKey})
+	if err != nil {
+		t.Fatalf("FetchMeta: %v", err)
+	}
+	if cid != "" {
+		t.Fatalf("want empty content id, got %q", cid)
+	}
+}
+
 // helpers
 
 func readAll(r interface{ Read([]byte) (int, error) }) []byte {

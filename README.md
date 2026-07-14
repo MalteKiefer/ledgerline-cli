@@ -388,6 +388,7 @@ ledgerline-cli gallery download -o /path/to/folder
 | `--images` | Only images. |
 | `--videos` | Only videos. Pass both, or neither, for everything. |
 | `--force` | Overwrite files that already exist in the target. |
+| `--edited` | Write the gallery's edited date and location into each file's metadata and export Live Photos as a still + `.mov` motion pair that re-pairs on import. Requires [`exiftool`](https://exiftool.org) on `PATH`; without it, originals are exported unchanged. |
 
 Each photo is written under its original filename (a short id is appended when
 two photos share a name), with its capture time set as the file's modification

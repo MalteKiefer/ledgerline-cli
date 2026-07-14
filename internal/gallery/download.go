@@ -2,6 +2,7 @@ package gallery
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,9 @@ func withinDir(dir, path string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// WithinDir reports whether path stays inside dir.
+func WithinDir(dir, path string) bool { return withinDir(dir, path) }
+
 // FetchOriginal downloads and decrypts a photo's original bytes.
 func FetchOriginal(ctx context.Context, client *api.Client, vaultKey []byte, rec PhotoRecord) ([]byte, error) {
 	if rec.OriginalRef == "" || rec.OriginalKey == "" {
@@ -170,4 +174,40 @@ func parseTaken(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// FetchMotion downloads and decrypts a photo's paired motion clip.
+func FetchMotion(ctx context.Context, client *api.Client, vaultKey []byte, rec PhotoRecord) ([]byte, error) {
+	if rec.MotionRef == "" || rec.MotionKey == "" {
+		return nil, fmt.Errorf("photo %s has no motion blob", rec.ID)
+	}
+	blob, err := client.GetGalleryBlob(ctx, rec.MotionRef)
+	if err != nil {
+		return nil, err
+	}
+	return crypto.DecryptContent(blob, rec.MotionKey, vaultKey)
+}
+
+// FetchMeta downloads and decrypts a photo's metadata blob and returns its Apple
+// content id (empty when the blob has none).
+func FetchMeta(ctx context.Context, client *api.Client, vaultKey []byte, rec PhotoRecord) (string, error) {
+	if rec.MetaRef == "" || rec.MetaKey == "" {
+		return "", fmt.Errorf("photo %s has no meta blob", rec.ID)
+	}
+	blob, err := client.GetGalleryBlob(ctx, rec.MetaRef)
+	if err != nil {
+		return "", err
+	}
+	plain, err := crypto.DecryptContent(blob, rec.MetaKey, vaultKey)
+	if err != nil {
+		return "", err
+	}
+	var mb metaBlob
+	if err := json.Unmarshal(plain, &mb); err != nil {
+		return "", err
+	}
+	if mb.ContentID == nil {
+		return "", nil
+	}
+	return *mb.ContentID, nil
 }

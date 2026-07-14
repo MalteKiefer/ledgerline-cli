@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,6 +22,7 @@ type downloadOptions struct {
 	to     string
 	images bool
 	videos bool
+	edited bool
 	force  bool
 }
 
@@ -37,6 +40,8 @@ func newGalleryDownloadCommand() *cobra.Command {
 			"  --from / --to    only photos taken in a date range (YYYY-MM-DD, inclusive)\n" +
 			"  --images         only images\n" +
 			"  --videos         only videos (pass both, or neither, for everything)\n\n" +
+			"  --edited         write edited date/location into each file's metadata\n" +
+			"                   and export Live Photo motion (needs exiftool)\n\n" +
 			"Files already present in the target are skipped; pass --force to overwrite.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -50,6 +55,7 @@ func newGalleryDownloadCommand() *cobra.Command {
 	f.StringVar(&opts.to, "to", "", "only photos taken on or before this date (YYYY-MM-DD)")
 	f.BoolVar(&opts.images, "images", false, "download only images")
 	f.BoolVar(&opts.videos, "videos", false, "download only videos")
+	f.BoolVar(&opts.edited, "edited", false, "bake edited date/GPS into metadata and export Live Photo motion (requires exiftool)")
 	f.BoolVar(&opts.force, "force", false, "overwrite files that already exist in the target")
 	return cmd
 }
@@ -69,6 +75,12 @@ func runDownload(cmd *cobra.Command, opts downloadOptions) error {
 	}
 	if err := os.MkdirAll(opts.outDir, 0o700); err != nil {
 		return err
+	}
+
+	editing := opts.edited
+	if editing && !gallery.ExiftoolAvailable() {
+		fmt.Fprintln(out, "Note: exiftool not found on PATH — exporting originals unchanged (no metadata merge, no motion).")
+		editing = false
 	}
 
 	client, err := authedClient(ctx)
@@ -108,6 +120,24 @@ func runDownload(cmd *cobra.Command, opts downloadOptions) error {
 			}
 		}
 
+		if editing {
+			motion, warn, derr := downloadOneEdited(ctx, client, vk, t)
+			if derr != nil {
+				failed++
+				fmt.Fprintf(out, "  [%d/%d] %s — failed: %v\n", i+1, len(targets), label, derr)
+				continue
+			}
+			downloaded++
+			suffix := ""
+			if motion {
+				suffix = " (+motion)"
+			}
+			fmt.Fprintf(out, "  [%d/%d] %s — downloaded%s\n", i+1, len(targets), label, suffix)
+			if warn != "" {
+				fmt.Fprintf(out, "      - %s\n", warn)
+			}
+			continue
+		}
 		if err := downloadOne(ctx, client, vk, t); err != nil {
 			failed++
 			fmt.Fprintf(out, "  [%d/%d] %s — failed: %v\n", i+1, len(targets), label, err)
@@ -153,6 +183,95 @@ func writeAtomic(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// motionSidecarPath returns the still's path with its extension replaced by
+// .mov, so a Live Photo's motion clip sits beside the still with the same stem.
+func motionSidecarPath(stillPath string) string {
+	ext := filepath.Ext(stillPath)
+	return strings.TrimSuffix(stillPath, ext) + ".mov"
+}
+
+// writePatchRename writes data to a temp file, patches it in place with
+// exiftool, then atomically renames it to path — reusing the symlink guard so an
+// existing symlink at the destination is never written through.
+func writePatchRename(ctx context.Context, path string, data []byte, e gallery.ExifEdits) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through a symlink: %s", path)
+	}
+	// Temp name is safe only because the download loop is sequential; future parallelism must revisit this.
+	tmp := path + ".part"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := gallery.RunExiftool(ctx, tmp, e); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// downloadOneEdited writes the still with its edited date/GPS baked in, and for
+// a Live Photo also writes the motion clip beside it with a matching Apple
+// ContentIdentifier so the pair re-associates on import. A failure to write the
+// motion half is non-fatal: the still is kept and motionWritten is false.
+// warn is a short message describing any non-fatal motion export failure.
+func downloadOneEdited(ctx context.Context, client *api.Client, vk []byte, t gallery.Target) (bool, string, error) {
+	data, err := gallery.FetchOriginal(ctx, client, vk, t.Rec)
+	if err != nil {
+		return false, "", err
+	}
+
+	edits := gallery.ExifEdits{
+		TakenAt: t.When,
+		Lat:     t.Rec.Lat,
+		Lng:     t.Rec.Lng,
+		Video:   t.Rec.MediaType == "video",
+	}
+
+	cid := ""
+	live := t.Rec.MotionRef != "" && t.Rec.MotionKey != ""
+	if live {
+		if got, merr := gallery.FetchMeta(ctx, client, vk, t.Rec); merr == nil && gallery.ValidContentID(got) {
+			cid = got
+			edits.ContentID = got
+		}
+	}
+
+	if err := writePatchRename(ctx, t.Path, data, edits); err != nil {
+		return false, "", err
+	}
+	if !t.When.IsZero() {
+		_ = os.Chtimes(t.Path, t.When, t.When)
+	}
+
+	// Motion sidecar only when we have a still (not a standalone video) and a
+	// usable content id to guarantee re-pairing.
+	if !live || cid == "" || t.Rec.MediaType == "video" {
+		if live && cid == "" {
+			return false, "motion export failed: content identifier unavailable", nil
+		}
+		return false, "", nil
+	}
+	motionPath := motionSidecarPath(t.Path)
+	if !gallery.WithinDir(filepath.Dir(t.Path), motionPath) {
+		return false, "motion sidecar path rejected", nil
+	}
+	motion, merr := gallery.FetchMotion(ctx, client, vk, t.Rec)
+	if merr != nil {
+		return false, "motion clip fetch failed", nil // non-fatal: still is already written
+	}
+	if err := writePatchRename(ctx, motionPath, motion, gallery.ExifEdits{ContentID: cid, Video: true}); err != nil {
+		return false, "motion export failed: " + err.Error(), nil
+	}
+	if !t.When.IsZero() {
+		_ = os.Chtimes(motionPath, t.When, t.When)
+	}
+	return true, "", nil
 }
 
 // buildFilter resolves the media-type and date flags into a gallery.Filter.
