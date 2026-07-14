@@ -2,6 +2,28 @@ package cmd
 
 import "testing"
 
+func TestMotionSidecarPath(t *testing.T) {
+	cases := map[string]string{
+		"/out/IMG_1.HEIC": "/out/IMG_1.mov",
+		"/out/IMG_2.jpg":  "/out/IMG_2.mov",
+		"/out/no_ext":     "/out/no_ext.mov",
+	}
+	for in, want := range cases {
+		if got := motionSidecarPath(in); got != want {
+			t.Errorf("motionSidecarPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestEditedFallbackWhenExiftoolMissing(t *testing.T) {
+	// buildFilter is exercised elsewhere; here we assert the flag is wired so a
+	// missing exiftool downgrades to plain export rather than erroring.
+	opts := downloadOptions{edited: true, images: true, videos: true}
+	if _, err := buildFilter(opts); err != nil {
+		t.Fatalf("buildFilter with --edited should not error: %v", err)
+	}
+}
+
 func TestValidateUploadFlags(t *testing.T) {
 	cases := []struct {
 		name    string

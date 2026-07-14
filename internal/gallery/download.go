@@ -101,6 +101,9 @@ func withinDir(dir, path string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// WithinDir reports whether path stays inside dir.
+func WithinDir(dir, path string) bool { return withinDir(dir, path) }
+
 // FetchOriginal downloads and decrypts a photo's original bytes.
 func FetchOriginal(ctx context.Context, client *api.Client, vaultKey []byte, rec PhotoRecord) ([]byte, error) {
 	if rec.OriginalRef == "" || rec.OriginalKey == "" {
