@@ -1,6 +1,7 @@
 package gallery
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +68,12 @@ func TestValidContentID(t *testing.T) {
 		if ValidContentID(bad) {
 			t.Errorf("malformed id must be rejected: %q", bad)
 		}
+	}
+}
+
+func TestRunExiftoolRejectsBadContentID(t *testing.T) {
+	err := RunExiftool(context.Background(), "/tmp/does-not-matter.jpg", ExifEdits{ContentID: "not-a-uuid"})
+	if err == nil {
+		t.Fatal("RunExiftool must reject a malformed ContentID before spawning exiftool")
 	}
 }

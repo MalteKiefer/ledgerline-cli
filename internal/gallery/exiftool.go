@@ -75,6 +75,9 @@ func absRef(v float64, pos, neg string) (string, string) {
 // RunExiftool patches path in place with the given edits. A no-op edit set
 // returns nil without spawning a process.
 func RunExiftool(ctx context.Context, path string, e ExifEdits) error {
+	if e.ContentID != "" && !ValidContentID(e.ContentID) {
+		return fmt.Errorf("exiftool: invalid ContentID %q", e.ContentID)
+	}
 	args := exiftoolArgs(path, e)
 	if len(args) == 2 { // just base flag + path: nothing to write
 		return nil
