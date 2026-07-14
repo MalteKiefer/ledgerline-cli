@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `gallery download --edited`: bake edited date/GPS into exported files and
+  export Live Photo motion (still + matching `.mov`) via exiftool.
+
 ## [0.6.1] - 2026-07-13
 
 ### Fixed
