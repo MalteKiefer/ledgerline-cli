@@ -121,7 +121,7 @@ func runDownload(cmd *cobra.Command, opts downloadOptions) error {
 		}
 
 		if editing {
-			motion, derr := downloadOneEdited(ctx, client, vk, t)
+			motion, warn, derr := downloadOneEdited(ctx, client, vk, t)
 			if derr != nil {
 				failed++
 				fmt.Fprintf(out, "  [%d/%d] %s — failed: %v\n", i+1, len(targets), label, derr)
@@ -133,6 +133,9 @@ func runDownload(cmd *cobra.Command, opts downloadOptions) error {
 				suffix = " (+motion)"
 			}
 			fmt.Fprintf(out, "  [%d/%d] %s — downloaded%s\n", i+1, len(targets), label, suffix)
+			if warn != "" {
+				fmt.Fprintf(out, "      - %s\n", warn)
+			}
 			continue
 		}
 		if err := downloadOne(ctx, client, vk, t); err != nil {
@@ -196,6 +199,7 @@ func writePatchRename(ctx context.Context, path string, data []byte, e gallery.E
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to write through a symlink: %s", path)
 	}
+	// Temp name is safe only because the download loop is sequential; future parallelism must revisit this.
 	tmp := path + ".part"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
@@ -215,10 +219,11 @@ func writePatchRename(ctx context.Context, path string, data []byte, e gallery.E
 // a Live Photo also writes the motion clip beside it with a matching Apple
 // ContentIdentifier so the pair re-associates on import. A failure to write the
 // motion half is non-fatal: the still is kept and motionWritten is false.
-func downloadOneEdited(ctx context.Context, client *api.Client, vk []byte, t gallery.Target) (bool, error) {
+// warn is a short message describing any non-fatal motion export failure.
+func downloadOneEdited(ctx context.Context, client *api.Client, vk []byte, t gallery.Target) (bool, string, error) {
 	data, err := gallery.FetchOriginal(ctx, client, vk, t.Rec)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	edits := gallery.ExifEdits{
@@ -238,7 +243,7 @@ func downloadOneEdited(ctx context.Context, client *api.Client, vk []byte, t gal
 	}
 
 	if err := writePatchRename(ctx, t.Path, data, edits); err != nil {
-		return false, err
+		return false, "", err
 	}
 	if !t.When.IsZero() {
 		_ = os.Chtimes(t.Path, t.When, t.When)
@@ -247,23 +252,26 @@ func downloadOneEdited(ctx context.Context, client *api.Client, vk []byte, t gal
 	// Motion sidecar only when we have a still (not a standalone video) and a
 	// usable content id to guarantee re-pairing.
 	if !live || cid == "" || t.Rec.MediaType == "video" {
-		return false, nil
+		if live && cid == "" {
+			return false, "motion export failed: content identifier unavailable", nil
+		}
+		return false, "", nil
 	}
 	motionPath := motionSidecarPath(t.Path)
 	if !gallery.WithinDir(filepath.Dir(t.Path), motionPath) {
-		return false, nil
+		return false, "motion sidecar path rejected", nil
 	}
 	motion, merr := gallery.FetchMotion(ctx, client, vk, t.Rec)
 	if merr != nil {
-		return false, nil // non-fatal: still is already written
+		return false, "motion clip fetch failed", nil // non-fatal: still is already written
 	}
 	if err := writePatchRename(ctx, motionPath, motion, gallery.ExifEdits{ContentID: cid, Video: true}); err != nil {
-		return false, nil
+		return false, "motion export failed: " + err.Error(), nil
 	}
 	if !t.When.IsZero() {
 		_ = os.Chtimes(motionPath, t.When, t.When)
 	}
-	return true, nil
+	return true, "", nil
 }
 
 // buildFilter resolves the media-type and date flags into a gallery.Filter.
