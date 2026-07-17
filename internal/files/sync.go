@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -149,10 +150,10 @@ func (s *Syncer) reconcile(ctx context.Context, rel string, l *localEntry, r Ent
 
 	switch {
 	case hasLocal && hasRemote:
-		// Byte-identical (size + mtime) → nothing to do, even without a baseline.
-		// This stops a first sync from flagging every pre-existing file as a
-		// conflict.
-		if s.sameFile(l, r) {
+		// Identical content → nothing to do, even without a baseline. This stops a
+		// first sync from flagging every pre-existing file as a conflict and then
+		// re-downloading it.
+		if s.identical(ctx, l, r) {
 			res.Skipped++
 			return stateOf(l, r), true
 		}
@@ -394,24 +395,60 @@ func (s *Syncer) remotePath(rel string) string {
 	return s.remoteBase + "/" + rel
 }
 
-// sameFile reports whether the local and remote copies are the same content,
-// using a cheap size + mtime heuristic. The remote's mtime is its record's
-// Created time, which this tool sets from the local mtime on upload (see
-// create/toISO), so a previously-synced pair matches exactly. Files uploaded
-// elsewhere match only when size and timestamp happen to line up (within 1s).
-func (s *Syncer) sameFile(l *localEntry, r Entry) bool {
+// identical reports whether the local and remote copies hold the same content.
+// Different sizes are trivially different. When sizes match, a mtime that lines
+// up with the remote's Created time (which this tool sets from the local mtime
+// on upload) is taken as proof — the cheap path for tool-synced pairs. Otherwise
+// the remote Created is unreliable (e.g. web uploads stamp the upload time), so
+// fall back to comparing actual bytes to avoid needlessly re-downloading files
+// that only differ in timestamp. On any comparison error it returns false and
+// lets the normal reconcile path handle the pair.
+func (s *Syncer) identical(ctx context.Context, l *localEntry, r Entry) bool {
 	if l == nil || r.View.ID == "" || l.size != r.View.Size {
 		return false
 	}
-	rt := parseISO(r.View.Created)
-	if rt.IsZero() {
-		return false
+	if rt := parseISO(r.View.Created); !rt.IsZero() {
+		d := time.Unix(0, l.mtime).Sub(rt)
+		if d < 0 {
+			d = -d
+		}
+		if d < time.Second {
+			return true
+		}
 	}
-	d := time.Unix(0, l.mtime).Sub(rt)
-	if d < 0 {
-		d = -d
+	same, err := s.sameContent(ctx, l, r)
+	return err == nil && same
+}
+
+// sameContent downloads the remote blob and compares its SHA-256 with the local
+// file's. Callers gate this on an equal size so it only runs when a content
+// check is actually needed.
+func (s *Syncer) sameContent(ctx context.Context, l *localEntry, r Entry) (bool, error) {
+	lh, err := hashFile(l.abs)
+	if err != nil {
+		return false, err
 	}
-	return d < time.Second
+	data, err := s.dl.Fetch(ctx, r.View)
+	if err != nil {
+		return false, err
+	}
+	return sha256.Sum256(data) == lh, nil
+}
+
+// hashFile streams a local file through SHA-256 without loading it all at once.
+func hashFile(path string) ([32]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return [32]byte{}, err
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out, nil
 }
 
 func stateOf(l *localEntry, r Entry) fileState {

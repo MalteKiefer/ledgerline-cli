@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `files sync` no longer flags every pre-existing file as a conflict on the
-  first run: a local and remote copy with identical size and modification time
-  are now left untouched (reported as `unchanged`).
+  first run: a local and remote copy holding the same content are left untouched
+  (reported as `unchanged`). Matching size + mtime is trusted directly; when the
+  remote timestamp is unreliable (e.g. a web upload stamps the upload time) the
+  bytes are compared instead, so identical files are not needlessly downloaded.
 - `files sync` default conflict policy is now `newest` (was `keep-both`), so a
   file that differs on both sides keeps whichever side changed last instead of
   duplicating it.

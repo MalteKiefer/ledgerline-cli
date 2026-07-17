@@ -474,6 +474,42 @@ func TestSyncSkipsIdenticalOnFirstRun(t *testing.T) {
 	}
 }
 
+// TestSyncSkipsIdenticalDespiteMtime verifies that a same-size copy whose mtime
+// does NOT line up with the remote Created time (e.g. a web upload) is still
+// recognised as identical via a content compare, instead of being re-downloaded.
+func TestSyncSkipsIdenticalDespiteMtime(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+
+	dirA := t.TempDir()
+	writeFile(t, filepath.Join(dirA, "a.txt"), "same-bytes")
+	opts := SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth}
+	runSync(t, ctx, client, vk, dirA, opts)
+
+	// B: identical content, but a wildly different mtime than the remote Created.
+	dirB := t.TempDir()
+	bPath := filepath.Join(dirB, "a.txt")
+	writeFile(t, bPath, "same-bytes")
+	old := time.Now().Add(-240 * time.Hour)
+	if err := os.Chtimes(bPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runSync(t, ctx, client, vk, dirB, opts)
+	if res.Conflicts != 0 || res.Downloaded != 0 || res.Uploaded != 0 {
+		t.Fatalf("identical content re-synced despite matching bytes: %+v", res)
+	}
+	if res.Skipped != 1 {
+		t.Fatalf("Skipped = %d, want 1", res.Skipped)
+	}
+	if got := readFile(t, bPath); got != "same-bytes" {
+		t.Fatalf("local file was overwritten: %q", got)
+	}
+}
+
 // TestSyncOverrideLocalWins verifies that --override pushes the local copy over
 // a differing remote instead of resolving by newest/keep-both.
 func TestSyncOverrideLocalWins(t *testing.T) {
