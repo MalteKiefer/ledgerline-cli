@@ -19,6 +19,7 @@ func newFilesSyncCommand() *cobra.Command {
 		conflict string
 		delete   string
 		hidden   bool
+		override bool
 		ignore   []string
 		dryRun   bool
 	)
@@ -31,11 +32,13 @@ func newFilesSyncCommand() *cobra.Command {
 			"  ledgerline-cli files sync --map Photos:/home/me/photos --map Docs:/home/me/docs\n" +
 			"  ledgerline-cli files sync --map /home/me/ledger        # whole store into one folder\n\n" +
 			"With no --map, the mappings from the settings file are used.\n\n" +
-			"Changes flow both ways. Deletions are propagated per --delete. When the\n" +
-			"same file changed on both sides, --conflict decides. A local sync-state\n" +
-			"database (in the config dir) records the last-synced state to tell which\n" +
-			"side changed. Hidden files are skipped unless --hidden; ignore patterns\n" +
-			"come from the settings file plus any --ignore flags.",
+			"Changes flow both ways. Files with identical size and modification time are\n" +
+			"left untouched. When a file differs on both sides, --conflict decides; the\n" +
+			"default (newest) keeps whichever side changed last. Use --override to make\n" +
+			"the local copy always win. Deletions are propagated per --delete. A local\n" +
+			"sync-state database (in the config dir) records the last-synced state to\n" +
+			"tell which side changed. Hidden files are skipped unless --hidden; ignore\n" +
+			"patterns come from the settings file plus any --ignore flags.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runFilesSync(cmd, syncFlags{
@@ -43,6 +46,7 @@ func newFilesSyncCommand() *cobra.Command {
 				conflict: conflict,
 				delete:   delete,
 				hidden:   hidden,
+				override: override,
 				ignore:   ignore,
 				dryRun:   dryRun,
 			})
@@ -51,9 +55,10 @@ func newFilesSyncCommand() *cobra.Command {
 
 	f := cmd.Flags()
 	f.StringArrayVar(&maps, "map", nil, "mapping remote:local (repeatable); a value with no colon maps the store root")
-	f.StringVar(&conflict, "conflict", files.ConflictKeepBoth, "conflict resolution: keep-both | newest | skip")
+	f.StringVar(&conflict, "conflict", files.ConflictNewest, "conflict resolution: newest | keep-both | skip")
 	f.StringVar(&delete, "delete", files.DeleteBoth, "deletion propagation: both | additive | to-remote")
 	f.BoolVar(&hidden, "hidden", false, "include hidden files (dotfiles)")
+	f.BoolVar(&override, "override", false, "on any difference, overwrite the remote copy with the local one")
 	f.StringArrayVar(&ignore, "ignore", nil, "extra ignore pattern (repeatable); adds to the settings ignore list")
 	f.BoolVar(&dryRun, "dry-run", false, "show what would change without modifying anything")
 	return cmd
@@ -65,6 +70,7 @@ type syncFlags struct {
 	conflict string
 	delete   string
 	hidden   bool
+	override bool
 	ignore   []string
 	dryRun   bool
 }
@@ -91,6 +97,7 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 		Conflict: fl.conflict,
 		Delete:   fl.delete,
 		Hidden:   fl.hidden || cfg.Hidden,
+		Override: fl.override,
 		Ignore:   files.NewMatcher(append(append([]string{}, cfg.Ignore...), fl.ignore...)),
 		DryRun:   fl.dryRun,
 		Log:      func(s string) { fmt.Fprintln(w, s) },
@@ -133,6 +140,7 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 		total.TrashedRemote += res.TrashedRemote
 		total.DeletedLocal += res.DeletedLocal
 		total.Conflicts += res.Conflicts
+		total.Skipped += res.Skipped
 		total.Failed += res.Failed
 		total.ConflictPaths = append(total.ConflictPaths, res.ConflictPaths...)
 	}
@@ -140,8 +148,8 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	if fl.dryRun {
 		fmt.Fprintln(w, "(dry run — nothing changed)")
 	}
-	fmt.Fprintf(w, "Done: %d up, %d down, %d remote-trashed, %d local-deleted, %d conflicts, %d failed.\n",
-		total.Uploaded, total.Downloaded, total.TrashedRemote, total.DeletedLocal, total.Conflicts, total.Failed)
+	fmt.Fprintf(w, "Done: %d up, %d down, %d unchanged, %d remote-trashed, %d local-deleted, %d conflicts, %d failed.\n",
+		total.Uploaded, total.Downloaded, total.Skipped, total.TrashedRemote, total.DeletedLocal, total.Conflicts, total.Failed)
 	if len(total.ConflictPaths) > 0 && fl.conflict == files.ConflictSkip {
 		fmt.Fprintln(w, "Conflicts (resolve manually):")
 		for _, p := range total.ConflictPaths {
