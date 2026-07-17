@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   export Live Photo motion (still + matching `.mov`) via exiftool.
 - `files sync --override`: on any difference, overwrite the remote copy with the
   local one (skips the newest/keep-both resolution).
+- `files sync` shows a live progress bar on a terminal — position (done/total)
+  plus running tallies (unchanged/up/down/removed/conflicts) and the current
+  file — so a slow pass (content comparisons download blobs) no longer looks
+  frozen.
 
 ### Changed
 
