@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
 
 // nowISO is the current time as an ISO-8601 UTC string (matches new Date().toISOString()).
@@ -169,20 +171,29 @@ func newFilesUploadCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "upload",
-		Short: "Upload a local folder into encrypted files",
-		Long: "Upload a local folder, recreating its subfolders under the files tree.\n\n" +
-			"  ledgerline-cli files upload -f /local/dir [--remote Target]\n\n" +
+		Short: "Upload a local file or folder into encrypted files",
+		Long: "Upload a local file or folder, recreating any subfolders under the files tree.\n\n" +
+			"  ledgerline-cli files upload /local/file.jpg [--remote Target]   # a single file\n" +
+			"  ledgerline-cli files upload /local/dir [--remote Target]        # a folder tree\n" +
+			"  ledgerline-cli files upload -f /local/dir [--remote Target]     # same, via flag\n\n" +
 			"A file already present with the same size is skipped; a changed file adds\n" +
 			"a new version. Hidden files (dotfiles) are skipped unless --hidden.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if folder == "" {
-				return errors.New("a source folder is required: -f/--folder")
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			src := folder
+			if len(args) == 1 {
+				if src != "" {
+					return errors.New("pass the source as a positional argument or -f/--folder, not both")
+				}
+				src = args[0]
 			}
-			return runFilesUpload(cmd, folder, remote, hidden)
+			if src == "" {
+				return errors.New("a source file or folder is required")
+			}
+			return runFilesUpload(cmd, src, remote, hidden)
 		},
 	}
-	cmd.Flags().StringVarP(&folder, "folder", "f", "", "local source folder (required)")
+	cmd.Flags().StringVarP(&folder, "folder", "f", "", "local source file or folder (alternative to the positional argument)")
 	cmd.Flags().StringVar(&remote, "remote", "", "remote target folder path (default: root)")
 	cmd.Flags().BoolVar(&hidden, "hidden", false, "include hidden files (dotfiles)")
 	return cmd
@@ -221,18 +232,45 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 	index := files.IndexByPath(store, remoteBase)
 	up := files.NewUploader(client, store, vk)
 
+	bar := ui.NewProgressBar(w, len(locals), term.IsTerminal(int(os.Stdout.Fd())))
+
+	// Live per-byte progress within the current file. The callback fires from the
+	// HTTP transport many times per second, so throttle redraws to ~20/s.
+	var curIdx int
+	var curRel string
+	var lastDraw time.Time
+	if bar.Active() {
+		up.SetProgress(func(sent, total int64) {
+			if total <= 0 {
+				return
+			}
+			now := time.Now()
+			done := sent >= total
+			if !done && now.Sub(lastDraw) < 50*time.Millisecond {
+				return
+			}
+			lastDraw = now
+			frac := float64(sent) / float64(total)
+			bar.UpdateFrac(curIdx, frac, fmt.Sprintf("%s %d%%", curRel, int(frac*100)))
+		})
+	}
+
 	var created, updated, skipped, failed int
 	for i, lf := range locals {
 		if ctx.Err() != nil {
 			break
 		}
+		curIdx, curRel = i, lf.rel
+		// Draw the bar before the work so a slow upload shows the current file
+		// instead of a frozen screen.
+		bar.Update(i, lf.rel)
 		remotePath := joinRemote(remoteBase, lf.rel)
 		existing, exists := index[lf.rel]
 
 		data, rerr := os.ReadFile(lf.abs)
 		if rerr != nil {
 			failed++
-			fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(locals), lf.rel, rerr)
+			bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, rerr))
 			continue
 		}
 		mimeType := mimeForName(lf.rel)
@@ -240,25 +278,30 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 		switch {
 		case exists && existing.View.Size == int64(len(data)):
 			skipped++
-			continue
 		case exists:
 			if _, err := up.Replace(ctx, existing.View.ID, mimeType, data); err != nil {
 				failed++
-				fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(locals), lf.rel, err)
+				bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, err))
 				continue
 			}
 			updated++
-			fmt.Fprintf(w, "  [%d/%d] %s — updated\n", i+1, len(locals), lf.rel)
+			if !bar.Active() {
+				fmt.Fprintf(w, "  [%d/%d] %s — updated\n", i+1, len(locals), lf.rel)
+			}
 		default:
 			if _, _, err := up.Create(ctx, remotePath, mimeType, nowISO(), data); err != nil {
 				failed++
-				fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(locals), lf.rel, err)
+				bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, err))
 				continue
 			}
 			created++
-			fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", i+1, len(locals), lf.rel)
+			if !bar.Active() {
+				fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", i+1, len(locals), lf.rel)
+			}
 		}
+		bar.Update(i+1, lf.rel)
 	}
+	bar.Finish()
 
 	if store.Dirty() {
 		fmt.Fprintln(w, "Saving…")
@@ -277,14 +320,19 @@ type localFile struct {
 }
 
 // collectLocalFiles walks root, returning regular files (dotfiles only when
-// hidden is set), always skipping junk metadata files.
+// hidden is set), always skipping junk metadata files. When root is a single
+// file it is returned directly, keyed by its base name.
 func collectLocalFiles(root string, hidden bool) ([]localFile, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a folder", root)
+		name := filepath.Base(root)
+		if isJunk(name) {
+			return nil, fmt.Errorf("%s is a metadata file and will not be uploaded", name)
+		}
+		return []localFile{{abs: root, rel: name}}, nil
 	}
 
 	var out []localFile

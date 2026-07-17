@@ -16,16 +16,21 @@ const maxVersions = 10
 // Uploader encrypts local content and records it in the manifest, creating a new
 // file or adding a version to an existing one at the same path.
 type Uploader struct {
-	client *api.Client
-	store  *Store
-	tree   *Tree
-	vk     []byte
+	client   *api.Client
+	store    *Store
+	tree     *Tree
+	vk       []byte
+	progress func(sent, total int64)
 }
 
 // NewUploader builds an uploader over a store (and its tree).
 func NewUploader(client *api.Client, store *Store, vaultKey []byte) *Uploader {
 	return &Uploader{client: client, store: store, tree: NewTree(store), vk: vaultKey}
 }
+
+// SetProgress installs a callback fired while a blob's bytes stream to the
+// server. Pass nil to disable. Not safe for concurrent Create/Replace calls.
+func (u *Uploader) SetProgress(onProgress func(sent, total int64)) { u.progress = onProgress }
 
 // Tree exposes the uploader's folder tree (shared so paths resolve consistently).
 func (u *Uploader) Tree() *Tree { return u.tree }
@@ -41,7 +46,7 @@ func (u *Uploader) encryptAndStore(ctx context.Context, plain []byte) (blob, enc
 	if err != nil {
 		return "", "", err
 	}
-	blob, err = u.client.UploadFileBlob(ctx, padded)
+	blob, err = u.client.UploadFileBlobProgress(ctx, padded, u.progress)
 	if err != nil {
 		return "", "", err
 	}
