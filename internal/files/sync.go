@@ -35,6 +35,7 @@ type SyncOptions struct {
 	Conflict string
 	Delete   string
 	Hidden   bool
+	Override bool // on any difference, push the local copy over the remote
 	Ignore   *Matcher
 	DryRun   bool
 	Log      func(string)
@@ -148,6 +149,17 @@ func (s *Syncer) reconcile(ctx context.Context, rel string, l *localEntry, r Ent
 
 	switch {
 	case hasLocal && hasRemote:
+		// Byte-identical (size + mtime) → nothing to do, even without a baseline.
+		// This stops a first sync from flagging every pre-existing file as a
+		// conflict.
+		if s.sameFile(l, r) {
+			res.Skipped++
+			return stateOf(l, r), true
+		}
+		// --override: local always wins on any difference.
+		if s.opts.Override {
+			return s.push(ctx, rel, l, r.View.ID, res)
+		}
 		localChanged := !hadState || l.size != prev.LocalSize || l.mtime != prev.LocalMtime
 		remoteChanged := !hadState || r.View.Blob != prev.RemoteBlob
 		switch {
@@ -380,6 +392,26 @@ func (s *Syncer) remotePath(rel string) string {
 		return rel
 	}
 	return s.remoteBase + "/" + rel
+}
+
+// sameFile reports whether the local and remote copies are the same content,
+// using a cheap size + mtime heuristic. The remote's mtime is its record's
+// Created time, which this tool sets from the local mtime on upload (see
+// create/toISO), so a previously-synced pair matches exactly. Files uploaded
+// elsewhere match only when size and timestamp happen to line up (within 1s).
+func (s *Syncer) sameFile(l *localEntry, r Entry) bool {
+	if l == nil || r.View.ID == "" || l.size != r.View.Size {
+		return false
+	}
+	rt := parseISO(r.View.Created)
+	if rt.IsZero() {
+		return false
+	}
+	d := time.Unix(0, l.mtime).Sub(rt)
+	if d < 0 {
+		d = -d
+	}
+	return d < time.Second
 }
 
 func stateOf(l *localEntry, r Entry) fileState {

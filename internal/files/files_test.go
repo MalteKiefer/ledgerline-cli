@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
@@ -430,6 +431,83 @@ func runSync(t *testing.T, ctx context.Context, client *api.Client, vk []byte, d
 		t.Fatal(err)
 	}
 	return res
+}
+
+// TestSyncSkipsIdenticalOnFirstRun verifies that a pre-existing file present on
+// both sides with matching size+mtime is left untouched even without a prior
+// sync-state baseline — i.e. a first sync no longer flags it as a conflict.
+func TestSyncSkipsIdenticalOnFirstRun(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+
+	dirA := t.TempDir()
+	aPath := filepath.Join(dirA, "a.txt")
+	writeFile(t, aPath, "hello")
+
+	opts := SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth}
+	// Sync A uploads a.txt; its remote Created is set from A's mtime.
+	if res := runSync(t, ctx, client, vk, dirA, opts); res.Uploaded != 1 {
+		t.Fatalf("A upload = %d, want 1", res.Uploaded)
+	}
+
+	// A brand-new local dir B with byte-identical content and the same mtime.
+	fi, err := os.Stat(aPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirB := t.TempDir()
+	bPath := filepath.Join(dirB, "a.txt")
+	writeFile(t, bPath, "hello")
+	if err := os.Chtimes(bPath, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runSync(t, ctx, client, vk, dirB, opts) // first sync for B → no baseline
+	if res.Conflicts != 0 || res.Uploaded != 0 || res.Downloaded != 0 {
+		t.Fatalf("identical file mishandled: %+v (want 0 conflicts/up/down)", res)
+	}
+	if res.Skipped != 1 {
+		t.Fatalf("Skipped = %d, want 1", res.Skipped)
+	}
+}
+
+// TestSyncOverrideLocalWins verifies that --override pushes the local copy over
+// a differing remote instead of resolving by newest/keep-both.
+func TestSyncOverrideLocalWins(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+
+	dirA := t.TempDir()
+	writeFile(t, filepath.Join(dirA, "a.txt"), "AAAA")
+	runSync(t, ctx, client, vk, dirA, SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth})
+
+	// B has different content (and a different size, so it is not treated as
+	// identical) with an older mtime — newest would pull, but override pushes.
+	dirB := t.TempDir()
+	bPath := filepath.Join(dirB, "a.txt")
+	writeFile(t, bPath, "BBBBBB")
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(bPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runSync(t, ctx, client, vk, dirB, SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth, Override: true})
+	if res.Uploaded != 1 || res.Downloaded != 0 || res.Conflicts != 0 {
+		t.Fatalf("override should push local: %+v", res)
+	}
+
+	// A fresh dir must now receive B's content.
+	dirC := t.TempDir()
+	runSync(t, ctx, client, vk, dirC, SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth})
+	if got := readFile(t, filepath.Join(dirC, "a.txt")); got != "BBBBBB" {
+		t.Fatalf("remote content = %q, want BBBBBB", got)
+	}
 }
 
 func writeFile(t *testing.T, path, content string) {

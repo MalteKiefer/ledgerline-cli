@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `gallery download --edited`: bake edited date/GPS into exported files and
   export Live Photo motion (still + matching `.mov`) via exiftool.
+- `files sync --override`: on any difference, overwrite the remote copy with the
+  local one (skips the newest/keep-both resolution).
+
+### Changed
+
+- `files sync` no longer flags every pre-existing file as a conflict on the
+  first run: a local and remote copy with identical size and modification time
+  are now left untouched (reported as `unchanged`).
+- `files sync` default conflict policy is now `newest` (was `keep-both`), so a
+  file that differs on both sides keeps whichever side changed last instead of
+  duplicating it.
 
 ## [0.6.1] - 2026-07-13
 
