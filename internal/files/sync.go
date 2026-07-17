@@ -40,6 +40,16 @@ type SyncOptions struct {
 	Ignore   *Matcher
 	DryRun   bool
 	Log      func(string)
+	Progress func(SyncProgress) // optional live progress; called per item
+}
+
+// SyncProgress is a snapshot of one sync pass's progress, reported to
+// SyncOptions.Progress before and after each item is reconciled.
+type SyncProgress struct {
+	Done    int        // items reconciled so far
+	Total   int        // total items to reconcile (union of local, remote, state)
+	Current string     // path currently being processed
+	Res     SyncResult // running tallies
 }
 
 // SyncResult tallies what a run did.
@@ -117,15 +127,22 @@ func (s *Syncer) Run(ctx context.Context) (SyncResult, error) {
 		remote[e.Path] = e
 	}
 
+	keys := unionKeys(local, remote, prev)
+	s.report(SyncProgress{Total: len(keys), Res: res})
+
 	next := syncState{}
-	for _, rel := range unionKeys(local, remote, prev) {
+	for i, rel := range keys {
 		if ctx.Err() != nil {
 			break
 		}
+		// Report before the work so a slow item (e.g. a content compare that
+		// downloads a blob) shows which file is in flight, not a frozen screen.
+		s.report(SyncProgress{Done: i, Total: len(keys), Current: rel, Res: res})
 		st, keep := s.reconcile(ctx, rel, local[rel], remote[rel], prev[rel], &res)
 		if keep {
 			next[rel] = st
 		}
+		s.report(SyncProgress{Done: i + 1, Total: len(keys), Current: rel, Res: res})
 	}
 
 	if s.store.Dirty() && !s.opts.DryRun {
@@ -382,6 +399,13 @@ func (s *Syncer) scanLocal() (map[string]*localEntry, error) {
 		return nil
 	})
 	return out, err
+}
+
+// report forwards a progress snapshot when a Progress callback is installed.
+func (s *Syncer) report(p SyncProgress) {
+	if s.opts.Progress != nil {
+		s.opts.Progress(p)
+	}
 }
 
 func (s *Syncer) ignored(rel string) bool {

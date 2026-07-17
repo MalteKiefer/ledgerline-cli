@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
 	"github.com/MalteKiefer/ledgerline-cli/internal/settings"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
 
 // newFilesSyncCommand builds the bidirectional `files sync` command.
@@ -93,6 +96,13 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 		return err
 	}
 
+	// A live bar (only on a terminal) shows position and running tallies so a
+	// slow pass — content comparisons download blobs — never looks frozen. It is
+	// (re)created per mapping once its item count is known. Action lines are
+	// printed as scrollback above the bar.
+	active := term.IsTerminal(int(os.Stdout.Fd()))
+	var bar *ui.ProgressBar
+
 	opts := files.SyncOptions{
 		Conflict: fl.conflict,
 		Delete:   fl.delete,
@@ -100,7 +110,24 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 		Override: fl.override,
 		Ignore:   files.NewMatcher(append(append([]string{}, cfg.Ignore...), fl.ignore...)),
 		DryRun:   fl.dryRun,
-		Log:      func(s string) { fmt.Fprintln(w, s) },
+		Log: func(s string) {
+			if bar != nil {
+				bar.Println(s)
+				return
+			}
+			fmt.Fprintln(w, s)
+		},
+		Progress: func(p files.SyncProgress) {
+			if !active {
+				return
+			}
+			if bar == nil {
+				bar = ui.NewProgressBar(w, p.Total, active)
+			}
+			bar.Update(p.Done, fmt.Sprintf("%s  ⏭%d ↑%d ↓%d ✗%d !%d", p.Current,
+				p.Res.Skipped, p.Res.Uploaded, p.Res.Downloaded,
+				p.Res.TrashedRemote+p.Res.DeletedLocal, p.Res.Conflicts))
+		},
 	}
 
 	client, err := authedClient(ctx)
@@ -130,8 +157,12 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	var total files.SyncResult
 	for _, m := range mappings {
 		fmt.Fprintf(w, "Sync %q ⇄ %s\n", displayRemote(m.Remote), m.Local)
+		bar = nil // fresh bar per mapping (Progress creates it with the right total)
 		syncer := files.NewSyncer(client, store, vk, m.Local, m.Remote, opts)
 		res, err := syncer.Run(ctx)
+		if bar != nil {
+			bar.Finish()
+		}
 		if err != nil {
 			return err
 		}
