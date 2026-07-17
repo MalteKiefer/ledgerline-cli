@@ -101,3 +101,80 @@ func (s *Spinner) Stop() {
 	// Clear the spinner line.
 	fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", len(s.label)+2))
 }
+
+// ProgressBar renders an in-place [####----] progress bar for a known number of
+// steps. When active is false (e.g. output is not a terminal or is piped) every
+// method is a no-op except Println, so scripted runs stay clean.
+type ProgressBar struct {
+	out    io.Writer
+	total  int
+	width  int
+	active bool
+	last   int // width of the last drawn line, for clearing
+}
+
+// NewProgressBar builds a bar over total steps. Pass active=false to disable the
+// in-place animation (Println still writes plain lines).
+func NewProgressBar(out io.Writer, total int, active bool) *ProgressBar {
+	return &ProgressBar{out: out, total: total, width: 24, active: active && total > 0}
+}
+
+// Update draws the bar at current/total steps with a trailing label.
+func (p *ProgressBar) Update(current int, label string) { p.UpdateFrac(current, 0, label) }
+
+// UpdateFrac draws the bar at (current+frac)/total steps, where frac in [0,1)
+// is progress through the current step — letting the fill advance within a
+// single item. Truncates the label to keep the line a reasonable width.
+func (p *ProgressBar) UpdateFrac(current int, frac float64, label string) {
+	if !p.active {
+		return
+	}
+	if frac < 0 {
+		frac = 0
+	} else if frac > 1 {
+		frac = 1
+	}
+	pos := (float64(current) + frac) / float64(p.total)
+	if pos > 1 {
+		pos = 1
+	}
+	filled := int(pos * float64(p.width))
+	if filled > p.width {
+		filled = p.width
+	}
+	pct := int(pos * 100)
+	if len(label) > 48 {
+		label = "…" + label[len(label)-47:]
+	}
+	line := fmt.Sprintf("[%s%s] %3d%% (%d/%d) %s",
+		strings.Repeat("#", filled), strings.Repeat("-", p.width-filled),
+		pct, current, p.total, label)
+	pad := ""
+	if len(line) < p.last {
+		pad = strings.Repeat(" ", p.last-len(line))
+	}
+	p.last = len(line)
+	fmt.Fprintf(p.out, "\r%s%s", line, pad)
+}
+
+// Println clears the bar line and writes a scrollback line above it. Use it for
+// per-item results (failures, updates) that should survive above the bar.
+func (p *ProgressBar) Println(a ...any) {
+	if p.active && p.last > 0 {
+		fmt.Fprintf(p.out, "\r%s\r", strings.Repeat(" ", p.last))
+		p.last = 0
+	}
+	fmt.Fprintln(p.out, a...)
+}
+
+// Active reports whether the bar animates in place. When false, callers should
+// fall back to plain per-item log lines.
+func (p *ProgressBar) Active() bool { return p.active }
+
+// Finish clears the bar line so following output starts clean.
+func (p *ProgressBar) Finish() {
+	if p.active && p.last > 0 {
+		fmt.Fprintf(p.out, "\r%s\r", strings.Repeat(" ", p.last))
+		p.last = 0
+	}
+}

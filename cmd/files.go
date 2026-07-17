@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
 
 // nowISO is the current time as an ISO-8601 UTC string (matches new Date().toISOString()).
@@ -230,18 +232,45 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 	index := files.IndexByPath(store, remoteBase)
 	up := files.NewUploader(client, store, vk)
 
+	bar := ui.NewProgressBar(w, len(locals), term.IsTerminal(int(os.Stdout.Fd())))
+
+	// Live per-byte progress within the current file. The callback fires from the
+	// HTTP transport many times per second, so throttle redraws to ~20/s.
+	var curIdx int
+	var curRel string
+	var lastDraw time.Time
+	if bar.Active() {
+		up.SetProgress(func(sent, total int64) {
+			if total <= 0 {
+				return
+			}
+			now := time.Now()
+			done := sent >= total
+			if !done && now.Sub(lastDraw) < 50*time.Millisecond {
+				return
+			}
+			lastDraw = now
+			frac := float64(sent) / float64(total)
+			bar.UpdateFrac(curIdx, frac, fmt.Sprintf("%s %d%%", curRel, int(frac*100)))
+		})
+	}
+
 	var created, updated, skipped, failed int
 	for i, lf := range locals {
 		if ctx.Err() != nil {
 			break
 		}
+		curIdx, curRel = i, lf.rel
+		// Draw the bar before the work so a slow upload shows the current file
+		// instead of a frozen screen.
+		bar.Update(i, lf.rel)
 		remotePath := joinRemote(remoteBase, lf.rel)
 		existing, exists := index[lf.rel]
 
 		data, rerr := os.ReadFile(lf.abs)
 		if rerr != nil {
 			failed++
-			fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(locals), lf.rel, rerr)
+			bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, rerr))
 			continue
 		}
 		mimeType := mimeForName(lf.rel)
@@ -249,25 +278,30 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 		switch {
 		case exists && existing.View.Size == int64(len(data)):
 			skipped++
-			continue
 		case exists:
 			if _, err := up.Replace(ctx, existing.View.ID, mimeType, data); err != nil {
 				failed++
-				fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(locals), lf.rel, err)
+				bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, err))
 				continue
 			}
 			updated++
-			fmt.Fprintf(w, "  [%d/%d] %s — updated\n", i+1, len(locals), lf.rel)
+			if !bar.Active() {
+				fmt.Fprintf(w, "  [%d/%d] %s — updated\n", i+1, len(locals), lf.rel)
+			}
 		default:
 			if _, _, err := up.Create(ctx, remotePath, mimeType, nowISO(), data); err != nil {
 				failed++
-				fmt.Fprintf(w, "  [%d/%d] %s — failed: %v\n", i+1, len(locals), lf.rel, err)
+				bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, err))
 				continue
 			}
 			created++
-			fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", i+1, len(locals), lf.rel)
+			if !bar.Active() {
+				fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", i+1, len(locals), lf.rel)
+			}
 		}
+		bar.Update(i+1, lf.rel)
 	}
+	bar.Finish()
 
 	if store.Dirty() {
 		fmt.Fprintln(w, "Saving…")
