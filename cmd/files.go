@@ -169,20 +169,29 @@ func newFilesUploadCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "upload",
-		Short: "Upload a local folder into encrypted files",
-		Long: "Upload a local folder, recreating its subfolders under the files tree.\n\n" +
-			"  ledgerline-cli files upload -f /local/dir [--remote Target]\n\n" +
+		Short: "Upload a local file or folder into encrypted files",
+		Long: "Upload a local file or folder, recreating any subfolders under the files tree.\n\n" +
+			"  ledgerline-cli files upload /local/file.jpg [--remote Target]   # a single file\n" +
+			"  ledgerline-cli files upload /local/dir [--remote Target]        # a folder tree\n" +
+			"  ledgerline-cli files upload -f /local/dir [--remote Target]     # same, via flag\n\n" +
 			"A file already present with the same size is skipped; a changed file adds\n" +
 			"a new version. Hidden files (dotfiles) are skipped unless --hidden.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if folder == "" {
-				return errors.New("a source folder is required: -f/--folder")
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			src := folder
+			if len(args) == 1 {
+				if src != "" {
+					return errors.New("pass the source as a positional argument or -f/--folder, not both")
+				}
+				src = args[0]
 			}
-			return runFilesUpload(cmd, folder, remote, hidden)
+			if src == "" {
+				return errors.New("a source file or folder is required")
+			}
+			return runFilesUpload(cmd, src, remote, hidden)
 		},
 	}
-	cmd.Flags().StringVarP(&folder, "folder", "f", "", "local source folder (required)")
+	cmd.Flags().StringVarP(&folder, "folder", "f", "", "local source file or folder (alternative to the positional argument)")
 	cmd.Flags().StringVar(&remote, "remote", "", "remote target folder path (default: root)")
 	cmd.Flags().BoolVar(&hidden, "hidden", false, "include hidden files (dotfiles)")
 	return cmd
@@ -277,14 +286,19 @@ type localFile struct {
 }
 
 // collectLocalFiles walks root, returning regular files (dotfiles only when
-// hidden is set), always skipping junk metadata files.
+// hidden is set), always skipping junk metadata files. When root is a single
+// file it is returned directly, keyed by its base name.
 func collectLocalFiles(root string, hidden bool) ([]localFile, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a folder", root)
+		name := filepath.Base(root)
+		if isJunk(name) {
+			return nil, fmt.Errorf("%s is a metadata file and will not be uploaded", name)
+		}
+		return []localFile{{abs: root, rel: name}}, nil
 	}
 
 	var out []localFile
