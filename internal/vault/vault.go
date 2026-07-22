@@ -36,6 +36,11 @@ func Unlock(ctx context.Context, client *api.Client, passphrase string) ([]byte,
 	if err := validateKDF(status.KdfOps, status.KdfMem); err != nil {
 		return nil, err
 	}
+	// Fail closed if the host/cgroup cannot hold the Argon2id derivation, rather
+	// than being OOM-killed mid-derivation on a memory-constrained host (§4a).
+	if err := checkMemoryFor(status.KdfMem); err != nil {
+		return nil, err
+	}
 	salt, err := decodeB64(status.Salt)
 	if err != nil {
 		return nil, err

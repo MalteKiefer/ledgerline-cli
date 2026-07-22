@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/canonicaljson"
@@ -100,7 +99,9 @@ func DecryptContent(blob []byte, encFileKey string, vaultKey []byte) ([]byte, er
 		return nil, err
 	}
 	if len(blob) < streamHeaderBytes {
-		return nil, errors.New("crypto: blob shorter than stream header")
+		// Uniform failure (§28): a truncated blob is corrupt ciphertext and must
+		// be indistinguishable from a wrong key or a flipped tag.
+		return nil, ErrDecrypt
 	}
 
 	state, err := initState(streamKey, blob[:streamHeaderBytes])

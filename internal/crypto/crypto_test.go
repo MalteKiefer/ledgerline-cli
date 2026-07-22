@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -257,4 +258,51 @@ func sealFixedNonce(t *testing.T, msg, nonce, key []byte) []byte {
 	var k [KeyBytes]byte
 	copy(k[:], key)
 	return secretbox.Seal(nil, msg, &n, &k)
+}
+
+// TestUniformDecryptionFailure asserts §28: every content-decryption failure —
+// wrong key, corrupt ciphertext, flipped tag, truncated frame — surfaces the
+// SAME sentinel (ErrDecrypt) so a caller cannot distinguish the cause, and none
+// panics.
+func TestUniformDecryptionFailure(t *testing.T) {
+	vk := rep(0x11, 32)
+	wrong := rep(0x22, 32)
+	blob, key, err := EncryptContent([]byte("secret payload for uniform-failure test"), vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	flip := func(b []byte) []byte { c := append([]byte(nil), b...); c[len(c)-1] ^= 0xff; return c }
+
+	cases := []struct {
+		name string
+		blob []byte
+		key  string
+		vk   []byte
+	}{
+		{"wrong vault key", blob, key, wrong},
+		{"corrupt trailing byte", flip(blob), key, vk},
+		{"truncated below header", blob[:10], key, vk},
+		{"truncated mid-frame", blob[:streamHeaderBytes+2], key, vk},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, derr := DecryptContent(tc.blob, tc.key, tc.vk)
+			if derr == nil {
+				t.Fatal("expected failure")
+			}
+			if !errors.Is(derr, ErrDecrypt) {
+				t.Fatalf("non-uniform error: %v (want ErrDecrypt)", derr)
+			}
+		})
+	}
+
+	// A wrong-key unwrap at the secretbox layer is the same sentinel.
+	sealed, err := Seal([]byte("k"), vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, oerr := Open(sealed, wrong); !errors.Is(oerr, ErrDecrypt) {
+		t.Fatalf("Open wrong key = %v (want ErrDecrypt)", oerr)
+	}
 }
