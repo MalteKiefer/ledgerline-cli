@@ -141,6 +141,7 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	}
 
 	store := gallery.NewStore(client, vk)
+	store.SetShardCache(shardCache("gallery-shards"))
 	fmt.Fprintln(out, "Loading gallery…")
 	if err := store.Load(ctx); err != nil {
 		return err

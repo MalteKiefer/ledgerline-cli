@@ -421,10 +421,11 @@ ledgerline-cli files sync     --map remote:local [--map …] [flags]
 `files rm` trashes by default (restore in the web app); `--force` deletes
 permanently and reclaims blobs, and a folder needs `--recursive`.
 
-`files upload` shows a live progress bar (overall count plus per-file bytes) and
-saves progress every `--batch` uploads (default 50; `0` saves once at the end),
-so an interrupted run keeps what it already stored and a re-run skips it
-(same-size files are skipped).
+`files upload` uploads up to `--jobs` files in parallel (default 4; raise it for
+a big import over a fast link), shows a live progress bar, and saves progress
+every `--batch` uploads (default 50; `0` saves once at the end), so an
+interrupted run keeps what it already stored and a re-run skips it (same-size
+files are skipped).
 
 `files ls` shows a folder's contents colour-coded with a monochrome per-type icon
 (Nerd Font glyphs; use `--icons none` if your terminal font lacks them, and
@@ -517,6 +518,10 @@ time from the web profile's device list, or with `auth logout`.
   `auth status` reports which backend is in use.
 - **Zero-knowledge:** the token authenticates API calls only. It does not derive,
   hold, or transmit any vault key.
+- **Shard cache:** to speed up repeated or resumed runs on a large library, the
+  CLI caches encrypted record shards in `cache/` under the config directory
+  (`0600` files in a `0700` dir). It stores **only ciphertext** — the same bytes
+  the server holds, never plaintext — and is cleared by `auth logout`.
 - **Store v3 (post-quantum):** the gallery and files use a content-addressed,
   id-bucketed sealed store with a crypto-suite tag on every manifest. Content at
   rest is symmetric (XChaCha20-Poly1305 + Argon2id → already quantum-resistant);

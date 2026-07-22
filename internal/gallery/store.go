@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
+	"github.com/MalteKiefer/ledgerline-cli/internal/blobcache"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
 	"github.com/MalteKiefer/ledgerline-cli/internal/shard"
 )
@@ -49,7 +50,12 @@ type Store struct {
 	shards     []shardDesc                // descriptors from the last load/save
 	root       map[string]json.RawMessage // full root, so unknown/collection keys survive
 	sigs       map[string]bool
+	cache      *blobcache.Cache // optional ciphertext shard cache (nil = disabled)
 }
+
+// SetShardCache attaches a ciphertext shard cache so repeated/resumed loads skip
+// re-fetching unchanged shards. Ciphertext only — no plaintext at rest.
+func (s *Store) SetShardCache(c *blobcache.Cache) { s.cache = c }
 
 // NewStore builds a store bound to a client and unlocked vault key.
 func NewStore(client *api.Client, vaultKey []byte) *Store {
@@ -115,16 +121,30 @@ func (s *Store) Load(ctx context.Context) error {
 // shard aborts the load rather than silently dropping photos (a partial set could
 // be saved and would free the "missing" shard, losing data for good).
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
-	batched := s.prefetchShards(ctx, shards)
+	// Ciphertext cache first (immutable by ref); batch-fetch only the misses.
+	fromCache := make(map[string][]byte)
+	var miss []string
+	for _, sh := range shards {
+		if b, ok := s.cache.Get(sh.Ref); ok {
+			fromCache[sh.Ref] = b
+		} else {
+			miss = append(miss, sh.Ref)
+		}
+	}
+	batched := s.batchFetch(ctx, miss)
+
 	var photos []json.RawMessage
 	for i, sh := range shards {
-		blob, ok := batched[sh.Ref]
-		if !ok {
-			var err error
-			blob, err = s.fetchShardWithRetry(ctx, sh.Ref)
-			if err != nil {
-				return nil, fmt.Errorf("fetch shard %d/%d (%s): %w", i+1, len(shards), sh.Ref, err)
+		blob, cached := fromCache[sh.Ref]
+		if !cached {
+			var ok bool
+			if blob, ok = batched[sh.Ref]; !ok {
+				var err error
+				if blob, err = s.fetchShardWithRetry(ctx, sh.Ref); err != nil {
+					return nil, fmt.Errorf("fetch shard %d/%d (%s): %w", i+1, len(shards), sh.Ref, err)
+				}
 			}
+			s.cache.Put(sh.Ref, blob) // ciphertext only — safe at rest
 		}
 		plain, err := crypto.DecryptContent(blob, sh.Key, s.vk)
 		if err != nil {
@@ -136,22 +156,28 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 		}
 		photos = append(photos, arr...)
 	}
+	s.cache.Prune(shardRefs(shards))
 	return photos, nil
 }
 
-// prefetchShards fetches all shard ciphertexts in one raw-batch round-trip to cut
-// cold-load latency (§10). Best-effort: on any error, or for a single shard, it
-// returns whatever it got (possibly empty) and the caller falls back to a
-// per-blob GET (which retries). A ref the server omitted is simply absent here.
-func (s *Store) prefetchShards(ctx context.Context, shards []shardDesc) map[string][]byte {
-	if len(shards) < 2 {
-		return nil
-	}
+// shardRefs returns the non-empty refs of a shard set.
+func shardRefs(shards []shardDesc) []string {
 	refs := make([]string, 0, len(shards))
 	for _, sh := range shards {
 		if sh.Ref != "" {
 			refs = append(refs, sh.Ref)
 		}
+	}
+	return refs
+}
+
+// batchFetch fetches the given (cache-missed) refs in one raw-batch round-trip to
+// cut cold-load latency (§10). Best-effort: for fewer than two refs, or on any
+// error, it returns nil and the caller falls back to a per-blob GET (which
+// retries). A ref the server omitted is simply absent here.
+func (s *Store) batchFetch(ctx context.Context, refs []string) map[string][]byte {
+	if len(refs) < 2 {
+		return nil
 	}
 	batched, err := s.client.GetGalleryBlobsBatch(ctx, refs)
 	if err != nil {

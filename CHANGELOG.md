@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `files upload --jobs N` uploads up to N files in parallel (default 4), matching
+  `gallery upload` — a large bulk import is no longer one-file-at-a-time. The slow
+  per-file network step runs concurrently; the manifest is still saved safely at
+  each `--batch` boundary.
+- A content-addressed **shard cache** under the config directory: repeated or
+  resumed gallery/files runs against a large library skip re-downloading unchanged
+  record shards. The cache holds only **ciphertext** (never plaintext), is bounded
+  to the current library's shards, and is purged on `auth logout`.
+
 ## [0.7.2] - 2026-07-22
 
 ### Changed

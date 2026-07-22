@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
@@ -21,6 +22,11 @@ type Uploader struct {
 	tree     *Tree
 	vk       []byte
 	progress func(sent, total int64)
+
+	// stageMu serializes the fast in-memory staging (folder tree + manifest ops)
+	// so Create/Replace are safe to call from several upload workers at once; the
+	// slow blob upload runs OUTSIDE it, in parallel.
+	stageMu sync.Mutex
 }
 
 // NewUploader builds an uploader over a store (and its tree).
@@ -29,7 +35,9 @@ func NewUploader(client *api.Client, store *Store, vaultKey []byte) *Uploader {
 }
 
 // SetProgress installs a callback fired while a blob's bytes stream to the
-// server. Pass nil to disable. Not safe for concurrent Create/Replace calls.
+// server. Pass nil to disable. The callback is shared, so it is only meaningful
+// for a single-worker upload; parallel uploads leave it nil and use the overall
+// file-count progress instead.
 func (u *Uploader) SetProgress(onProgress func(sent, total int64)) { u.progress = onProgress }
 
 // Tree exposes the uploader's folder tree (shared so paths resolve consistently).
@@ -57,11 +65,15 @@ func (u *Uploader) encryptAndStore(ctx context.Context, plain []byte) (blob, enc
 // returning the new record id and blob id.
 func (u *Uploader) Create(ctx context.Context, remotePath, mime, createdISO string, plain []byte) (id, blob string, err error) {
 	dir, name := splitPath(remotePath)
-	folder, err := u.tree.EnsureFolder(dir)
+	// Slow network step runs unlocked (parallel across workers).
+	blob, encKey, err := u.encryptAndStore(ctx, plain)
 	if err != nil {
 		return "", "", err
 	}
-	blob, encKey, err := u.encryptAndStore(ctx, plain)
+	// Fast in-memory staging (folder tree + manifest op) is serialized.
+	u.stageMu.Lock()
+	defer u.stageMu.Unlock()
+	folder, err := u.tree.EnsureFolder(dir)
 	if err != nil {
 		return "", "", err
 	}
@@ -76,13 +88,17 @@ func (u *Uploader) Create(ctx context.Context, remotePath, mime, createdISO stri
 // Replace uploads new content for an existing file id, pushing the current blob
 // onto the version history (trimmed to maxVersions). Returns the new blob id.
 func (u *Uploader) Replace(ctx context.Context, id, mime string, plain []byte) (string, error) {
-	raw, ok := u.store.fileRawByID()[id]
-	if !ok {
-		return "", nil
-	}
+	// Slow network step runs unlocked (parallel across workers).
 	blob, encKey, err := u.encryptAndStore(ctx, plain)
 	if err != nil {
 		return "", err
+	}
+
+	u.stageMu.Lock()
+	defer u.stageMu.Unlock()
+	raw, ok := u.store.fileRawByID()[id]
+	if !ok {
+		return "", nil
 	}
 
 	var cur struct {
