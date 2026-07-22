@@ -395,10 +395,35 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The new root is now authoritative; shard blobs it no longer references are
+	// safe to reclaim. Best-effort AFTER the successful PUT — an interrupted or
+	// failed delete just leaves a harmless orphan, never data loss.
+	freed := freedShardRefs(s.shards, descriptors)
 	s.version = newVersion
 	s.shards = descriptors
 	s.shardBits = shardBits
+	for _, ref := range freed {
+		_ = s.client.DeleteGalleryBlob(ctx, ref)
+	}
 	return nil
+}
+
+// freedShardRefs returns the refs present in old but absent from the new
+// descriptors — shard blobs the re-sealed root no longer references.
+func freedShardRefs(old, next []shardDesc) []string {
+	live := make(map[string]bool, len(next))
+	for _, d := range next {
+		if d.Ref != "" {
+			live[d.Ref] = true
+		}
+	}
+	var freed []string
+	for _, d := range old {
+		if d.Ref != "" && !live[d.Ref] {
+			freed = append(freed, d.Ref)
+		}
+	}
+	return freed
 }
 
 // buildRoot assembles the sealed v3 root: it sets v/suite/shardBits/shards and

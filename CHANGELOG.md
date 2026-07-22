@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cold shard loads (gallery and files) fetch all record shards in one
   `raw-batch` round-trip instead of one request per shard, falling back to
   individual fetches for anything the batch omits.
+- Gallery and files re-seals now reclaim the shard (and replaced folder-
+  collection) blobs the new manifest no longer references, so repeated edits no
+  longer accumulate orphaned blobs server-side. Deletion happens only after the
+  new manifest is safely stored.
 
 ### Security
 

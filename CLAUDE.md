@@ -214,10 +214,12 @@ correctness/interop defects — conformance is green):
   statistical timing-distribution test is still deferred (flaky).
 - memory-ceiling cgroup INTEGRATION test at 18k (the guard's parsers are
   unit-tested; a real-cgroup run is CI infra) — open.
-- Reconcile: the CLI does NOT call `/gallery|files/blobs/reconcile`; rebucket/
-  changed-bucket re-seal leaves orphan blobs (safe — no data loss; server GC).
-  If reconcile is ever added, the live-set MUST cover every ref class incl. the
-  interrupted-run case (§17 spec / §4a).
+- DONE 2026-07-22: the CLI now reclaims its OWN freed blobs after a successful
+  re-seal — freed record shards (both stores) + a replaced folders collection
+  blob (files) are DELETEd, but only after the new root PUT succeeds (an
+  interrupted/failed delete leaves a harmless orphan, never data loss). This is
+  targeted and safe; the CLI still does NOT trigger the destructive full-live-set
+  `/blobs/reconcile` sweep — that decision is in §13.
 - DONE 2026-07-22: TLS floor raised to 1.3 (`MinVersion: VersionTLS13`).
 - Perf: ETag/304 + a decrypted-shard disk cache not yet used on cold load
   (`/raw-batch` IS now used for the cold shard fetch). ETag/disk-cache is a
@@ -251,6 +253,17 @@ correctness/interop defects — conformance is green):
   deterministic `ct/dk` KAT values are validated JS-side; Go pins `ekSha256`
   (seed→ek, matches @noble exactly) + a live encaps→decaps round-trip.
 
+- **Full-live-set reconcile is intentionally NOT triggered by the CLI**
+  (2026-07-22). `/gallery|files/blobs/reconcile` GC-sweeps every blob NOT in a
+  caller-supplied live-set; a live-set missing any ref class (incl. face-crop
+  refs that live in cold meta blobs) = server-side data loss (§17/§4a). The CLI
+  has no need for it — it reclaims its own freed shard/collection blobs directly
+  (§12), and orphaned blobs are harmless. Implementing a full reconcile would add
+  a destructive path whose correctness depends on decrypting every meta blob to
+  gather crop refs; the risk outweighs the benefit for the capability floor.
+  Escalate before adding it: it needs the complete live-set + the interrupted-run
+  blocking test the spec mandates.
+
 ## 14. Deviations  [LIVING]
 
 - ML-KEM KAT verification is split (see §13) — a documented, spec-consistent
@@ -260,7 +273,9 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` supply-chain: CycloneDX SBOM (committed + CI diff),
+- 2026-07-22 `<pending>` gallery/files: reclaim freed shard/collection blobs
+  after a successful re-seal (no orphan accumulation; no full-reconcile).
+- 2026-07-22 `72e5aa9` supply-chain: CycloneDX SBOM (committed + CI diff),
   reproducible-build verification (deterministic commit-date BUILD_DATE).
 - 2026-07-22 `db03e22` perf/sec: raw-batch cold shard load (gallery+files); TLS
   1.3 floor; constant-time failure floor on unlock/recovery.

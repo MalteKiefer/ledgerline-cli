@@ -346,6 +346,13 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Reclaim blobs the new root no longer references (best-effort, after the
+	// successful PUT — an interrupted delete leaves a harmless orphan, never data
+	// loss): freed record shards plus a replaced folders collection blob.
+	freed := freedShardRefs(s.shards, descriptors)
+	if s.foldersDesc != nil && s.foldersDesc.Ref != "" && (foldersDesc == nil || foldersDesc.Ref != s.foldersDesc.Ref) {
+		freed = append(freed, s.foldersDesc.Ref)
+	}
 	s.version = newVersion
 	s.shards = descriptors
 	s.shardBits = shardBits
@@ -353,7 +360,28 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	// Fold the applied ops into the base so a subsequent Save starts clean.
 	s.baseFiles = files
 	s.baseFolders = folders
+	for _, ref := range freed {
+		_ = s.client.DeleteFileBlob(ctx, ref)
+	}
 	return nil
+}
+
+// freedShardRefs returns refs present in old but absent from next — shard blobs
+// the re-sealed root no longer references.
+func freedShardRefs(old, next []shardDesc) []string {
+	live := make(map[string]bool, len(next))
+	for _, d := range next {
+		if d.Ref != "" {
+			live[d.Ref] = true
+		}
+	}
+	var freed []string
+	for _, d := range old {
+		if d.Ref != "" && !live[d.Ref] {
+			freed = append(freed, d.Ref)
+		}
+	}
+	return freed
 }
 
 // buildShards buckets file records by id, re-seals only the buckets whose
