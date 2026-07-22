@@ -83,11 +83,16 @@ type ProcessExif struct {
 // ProcessResult is the JSON returned by POST /api/v1/gallery/process. Binary
 // derivations (thumb/medium/motion, face crops) are base64-encoded.
 type ProcessResult struct {
-	MediaType string          `json:"media_type"`
-	Width     int             `json:"width"`
-	Height    int             `json:"height"`
-	Duration  *float64        `json:"duration"`
-	ContentID *string         `json:"content_id"`
+	MediaType string   `json:"media_type"`
+	Width     int      `json:"width"`
+	Height    int      `json:"height"`
+	Duration  *float64 `json:"duration"`
+	ContentID *string  `json:"content_id"`
+	// Model is the CLIP model the server produced the embedding with (server
+	// config gallery.ml_clip_model). Native clients tag the record's embModel
+	// from this so semantic search only compares same-model embeddings (§8.5).
+	// Empty on an older server or a fast (no-ML) pass.
+	Model     string          `json:"model"`
 	Exif      ProcessExif     `json:"exif"`
 	Place     json.RawMessage `json:"place"`
 	Embedding json.RawMessage `json:"embedding"`

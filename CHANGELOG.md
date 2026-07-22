@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored and a re-run resumes (same-size files are skipped) — matching
   `gallery upload --batch`.
 
+### Changed
+
+- Gallery records now tag `embModel` from the CLIP model name the server returns
+  in the `/gallery/process` response (falling back to the configured name on an
+  older server), so semantic search only ever compares embeddings from the same
+  model across clients. Local-ML (`--ml-local`) still tags the local model.
+
 ### Security
 
 - The vault unlock now checks the host/cgroup memory ceiling before the Argon2id

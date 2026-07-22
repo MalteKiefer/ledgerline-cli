@@ -27,11 +27,20 @@ decision wins and the disagreement is logged here (§13), not silently resolved.
 
 ## 2. Shared-contract status  [LIVING]
 
-- **Aligned to:** web repo `ledgerline` @ branch `develop`, Store v3 as shipped by
-  commit `613e3721` (2026-07-21 "Harden Store v3 for conformance") and spec doc
-  update `c48351b` (2026-07-21 "align to shipped web v3 — per-module stores,
-  media_type, no blob suite prefix"). Verified 2026-07-22: §17 fixtures
-  byte-identical to the web copies; openapi endpoint shapes match.
+- **Aligned to:** web repo `ledgerline` @ branch `develop`, Store v3 through
+  commit `6f3c8f2e` (2026-07-22). Verified 2026-07-22: §17 fixtures byte-identical
+  to the web copies; openapi endpoint shapes match. Web crypto commits since the
+  initial align, assessed:
+  - `6c4b4eb7` ML-KEM identity secret = 64-byte FIPS-203 seed — CLI already
+    matches (`Identity.MLKEMSeed()` = `dk.Bytes()`; `NewIdentityFromSecrets` uses
+    `NewDecapsulationKey768(seed)`). No change.
+  - `863fd306` Argon2id — server-side public-share-password gate only
+    (`config/hashing.php`), not the vault KDF/KEM. No CLI impact. (HKDF per-vault
+    `context` stays `""` platform-wide — coordinated open item; CLI uses `""`.)
+  - `6f3c8f2e` `/gallery/process`+`/analyze` return `model` (CLIP name) so native
+    clients tag `embModel` authoritatively (§8.5) — ADOPTED: `ProcessResult.Model`
+    parsed; `pickEmbModel` uses the server model for a server-produced embedding,
+    the local model for a local-analyzer embedding, fallback to configured.
 - **Divergence from spec:** none currently known.
 - **Contract elements this client owns:** `internal/canonicaljson` (canonical
   JSON §5.2), `internal/crypto` FileCrypto blob frame + manifest seal + hybrid
@@ -242,7 +251,11 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` feat(files): `files upload --batch N` — periodic
+- 2026-07-22 `<pending>` fix(gallery): tag embModel from the server-returned CLIP
+  `model` (/process) per web `6f3c8f2e` (§8.5 cross-client search coherence).
+- 2026-07-22 `<merged>` test: fuzz parsers + no-secret-in-output; fix(files):
+  quiet per-batch checkpoint.
+- 2026-07-22 `<merged>` feat(files): `files upload --batch N` — periodic
   progress save (crash-safe/resumable), matching gallery.
 - 2026-07-22 `0d8657f` sec(vault): Argon2id host/cgroup memory guard (fail
   closed before an OOM kill on a memory-constrained host); uniform decryption
