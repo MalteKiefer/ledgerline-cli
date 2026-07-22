@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-22
+
 ### Added
 
 - `files upload --jobs N` uploads up to N files in parallel (default 4), matching
