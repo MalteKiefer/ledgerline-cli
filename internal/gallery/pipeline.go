@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
+	"github.com/MalteKiefer/ledgerline-cli/internal/canonicaljson"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
 	"github.com/MalteKiefer/ledgerline-cli/internal/ml"
 )
@@ -20,21 +22,45 @@ import (
 // as the web client's _fileSig.
 const sigCap = 1024 * 1024
 
+// defaultClipModel is the CLIP model the record's embModel is tagged with when an
+// embedding is present. It matches the web/server default Smart Search model
+// (README --ml-clip-model default), which must equal the server's for search to
+// compare embeddings coherently (§8.5).
+const defaultClipModel = "ViT-B-32__openai"
+
 // Uploader runs the zero-knowledge upload pipeline for one photo at a time. It
 // is safe for concurrent use across items (the store it writes to is guarded).
 type Uploader struct {
-	client   *api.Client
-	store    *Store
-	vk       []byte
-	withML   bool        // run the CLIP + face pass on the server
-	analyzer ml.Analyzer // run it on a local ML instance instead (nil if unused)
+	client    *api.Client
+	store     *Store
+	vk        []byte
+	process   bool        // opt-in server derivation (/process); off = partial records
+	withML    bool        // run the CLIP + face pass on the server
+	analyzer  ml.Analyzer // run it on a local ML instance instead (nil if unused)
+	clipModel string      // CLIP model name tagged on embModel when an embedding exists
 }
 
-// NewUploader builds an uploader. withML enables the server-side CLIP embedding
-// + face detection pass; analyzer, when non-nil, runs that pass on a local ML
-// instance instead. At most one of the two is in effect.
-func NewUploader(client *api.Client, store *Store, vaultKey []byte, withML bool, analyzer ml.Analyzer) *Uploader {
-	return &Uploader{client: client, store: store, vk: vaultKey, withML: withML, analyzer: analyzer}
+// NewUploader builds an uploader. process opts into the transient-plaintext
+// server derivation (/process); with it off (and no ML), the CLI writes a partial
+// record (basics + thumbPending) with NO plaintext egress (§8.1/§8.2), deferring
+// thumb/EXIF derivation to a GUI client. withML enables the server-side CLIP +
+// face pass; analyzer runs that pass on a local ML instance instead. Any ML mode
+// implies derivation. At most one of withML/analyzer is in effect.
+func NewUploader(client *api.Client, store *Store, vaultKey []byte, process, withML bool, analyzer ml.Analyzer) *Uploader {
+	return &Uploader{
+		client: client, store: store, vk: vaultKey,
+		process: process, withML: withML, analyzer: analyzer,
+		clipModel: defaultClipModel,
+	}
+}
+
+// SetClipModel overrides the CLIP model name tagged on embModel (from
+// --ml-clip-model), so a record's embModel matches the model that produced its
+// embedding.
+func (u *Uploader) SetClipModel(name string) {
+	if name != "" {
+		u.clipModel = name
+	}
 }
 
 // Item is one thing to upload: a still, plus an optional paired motion clip
@@ -105,7 +131,20 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 		}
 	}
 
-	// 3. Transient-plaintext transform: thumbnails, EXIF, (optionally) server ML.
+	// 3. Derivation is OPT-IN (§8.1/§8.2). By default the CLI writes a partial
+	// record (basics + thumbPending) with no plaintext egress; a GUI client
+	// backfills thumb/medium/EXIF/ML later. --process (or an ML mode) opts into the
+	// transient-plaintext server transform.
+	if !u.process && !u.withML && u.analyzer == nil {
+		rec.SetPartial(true)
+		rec.ThumbPending = true
+		if err := u.store.Add(rec); err != nil {
+			return 0, nil, err
+		}
+		return Uploaded, rec, nil
+	}
+
+	// Transient-plaintext transform: thumbnails, EXIF, (optionally) server ML.
 	// The declared mime tells the server whether to treat this as a video.
 	d, err := u.client.ProcessPhoto(ctx, name, rec.Mime, plain, u.withML)
 	if err != nil {
@@ -233,13 +272,23 @@ func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.Pro
 		faces = append(faces, mf)
 	}
 
-	// Metadata blob.
+	// embModel tags the record + meta with the CLIP model when an embedding is
+	// present (Array.isArray(embedding) ? clipModel : null), so search only ever
+	// compares embeddings within one model space (§8.5).
+	var embModel *string
+	if hasEmbedding(d.Embedding) {
+		m := u.clipModel
+		embModel = &m
+	}
+
+	// Metadata blob (cold; per-photo, immutable, never hashed → floats allowed).
 	exifJSON, _ := json.Marshal(d.Exif)
 	meta := metaBlob{
 		Exif:      exifJSON,
 		Place:     orNull(d.Place),
 		Embedding: orNull(d.Embedding),
 		Phash:     orNull(d.Phash),
+		EmbModel:  embModel,
 		Faces:     faces,
 		Width:     d.Width,
 		Height:    d.Height,
@@ -264,8 +313,11 @@ func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.Pro
 	if rec.TakenAt == "" {
 		rec.TakenAt = rec.Created
 	}
-	rec.Width, rec.Height, rec.Duration = d.Width, d.Height, d.Duration
-	rec.Lat, rec.Lng, rec.Camera = d.Exif.Lat, d.Exif.Lon, d.Exif.Camera
+	rec.Width, rec.Height = d.Width, d.Height
+	rec.Duration = roundDuration(d.Duration)
+	rec.Lat, rec.Lng = dec6Ptr(d.Exif.Lat), dec6Ptr(d.Exif.Lon)
+	rec.Camera = d.Exif.Camera
+	rec.EmbModel = embModel
 	rec.GeoChecked = true
 	if d.ContentID != nil {
 		rec.contentID = *d.ContentID // used to pair Live Photo halves post-upload
@@ -306,6 +358,33 @@ func (u *Uploader) encStore(ctx context.Context, plain []byte) (ref, key string,
 		return "", "", err
 	}
 	return ref, encKey, nil
+}
+
+// hasEmbedding reports whether a process result carried a real CLIP embedding
+// array (not null/empty), so embModel is only tagged when there is one.
+func hasEmbedding(raw json.RawMessage) bool {
+	s := bytes.TrimSpace(raw)
+	return len(s) > 0 && !bytes.Equal(s, []byte("null")) && !bytes.Equal(s, []byte("[]"))
+}
+
+// roundDuration converts a fractional-seconds duration to the integer-seconds the
+// hot record stores (§4.1/§5.2 integer-only), matching the server's (int) round.
+func roundDuration(f *float64) *int {
+	if f == nil {
+		return nil
+	}
+	n := int(math.Round(*f))
+	return &n
+}
+
+// dec6Ptr formats a float coordinate as a fixed 6-dp decimal string (or nil), the
+// canonical dec-string form for lat/lng in a hot record (§5.2).
+func dec6Ptr(f *float64) *string {
+	if f == nil {
+		return nil
+	}
+	s := canonicaljson.FormatDecimal(*f)
+	return &s
 }
 
 // FileSig reproduces the web fileSig (§6.5): "<size>:<sha256 of head‖tail 1 MiB>",

@@ -196,7 +196,7 @@ func TestUploadPipelineEndToEnd(t *testing.T) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	up := NewUploader(client, store, vk, false, nil)
+	up := NewUploader(client, store, vk, true, false, nil)
 
 	outcome, rec, err := up.Upload(ctx, Item{StillPath: photoPath}, original)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestUploadDedup(t *testing.T) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	up := NewUploader(client, store, vk, false, nil)
+	up := NewUploader(client, store, vk, true, false, nil)
 	data := []byte("dup-bytes")
 
 	if o, _, err := up.Upload(ctx, Item{StillPath: "/x/a.jpg"}, data); err != nil || o != Uploaded {
@@ -285,7 +285,7 @@ func TestParallelUploadIsRaceFree(t *testing.T) {
 	if err := store.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	up := NewUploader(client, store, vk, false, nil)
+	up := NewUploader(client, store, vk, true, false, nil)
 
 	// Upload many distinct items concurrently; the store's added list and sig
 	// index must stay consistent (run under -race to catch a regression).
@@ -484,4 +484,76 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// TestPartialUploadNoEgress verifies the §8.1/§8.2 default: with derivation off,
+// the CLI writes a partial record (basics + thumbPending, no renditions/meta) and
+// never calls /process — no plaintext leaves the machine. The record round-trips
+// through the v3 sharded store.
+func TestPartialUploadNoEgress(t *testing.T) {
+	const pass = "correct horse battery staple"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+
+	vk, err := vault.Unlock(ctx, client, pass)
+	if err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	dir := t.TempDir()
+	photoPath := filepath.Join(dir, "IMG_9999.jpg")
+	original := []byte("PARTIAL-PHOTO-BYTES")
+	if err := os.WriteFile(photoPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk, false, false, nil) // process off, no ML
+
+	outcome, rec, err := up.Upload(ctx, Item{StillPath: photoPath}, original)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if outcome != Uploaded {
+		t.Fatalf("outcome = %v", outcome)
+	}
+	if !rec.ThumbPending {
+		t.Fatal("partial record must set thumbPending")
+	}
+	if rec.ThumbRef != "" || rec.MediumRef != "" || rec.MetaRef != "" {
+		t.Fatalf("partial record must have no derived refs: %+v", rec)
+	}
+
+	if err := store.Save(ctx); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	fresh := NewStore(client, vk)
+	if err := fresh.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.basePhotos) != 1 {
+		t.Fatalf("want 1 photo, got %d", len(fresh.basePhotos))
+	}
+	// The persisted partial record carries thumbPending:true and the basics, but
+	// none of the derived fields (they are absent, not null).
+	var raw map[string]any
+	if err := json.Unmarshal(fresh.basePhotos[0], &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["thumbPending"] != true {
+		t.Fatalf("reloaded partial missing thumbPending:true, got %v", raw["thumbPending"])
+	}
+	for _, k := range []string{"thumbRef", "metaRef", "lat", "camera", "hasFaces"} {
+		if _, present := raw[k]; present {
+			t.Fatalf("partial record should omit %q, got %v", k, raw[k])
+		}
+	}
+	if raw["media_type"] != "image" || raw["sig"] == "" {
+		t.Fatalf("partial record lost its basics: %v", raw)
+	}
 }

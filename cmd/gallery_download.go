@@ -226,10 +226,11 @@ func downloadOneEdited(ctx context.Context, client *api.Client, vk []byte, t gal
 		return false, "", err
 	}
 
+	lat, lng := t.Rec.LatLngFloat()
 	edits := gallery.ExifEdits{
 		TakenAt: t.When,
-		Lat:     t.Rec.Lat,
-		Lng:     t.Rec.Lng,
+		Lat:     lat,
+		Lng:     lng,
 		Video:   t.Rec.MediaType == "video",
 	}
 
