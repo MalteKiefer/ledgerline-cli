@@ -1,0 +1,29 @@
+{
+  "note": "§17 Share manifest. Fixed 32-byte share key sk = base64(0x00..0x1f). A public-share album manifest sealed via ShareCrypto.wrap (secretbox, RANDOM nonce → ciphertext is NOT byte-pinnable). The cross-client contract we pin is: (1) the manifest serialises to exactly `plaintext` (JSON.stringify(manifest)), byte-for-byte `plaintextBytesHex`; (2) ShareCrypto.wrap→unwrap under sk round-trips to that plaintext. Every client must produce/consume the same sk-keyed secretbox format.",
+  "sk": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "skHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "manifest": {
+    "name": "Trip 2024",
+    "allowDownload": false,
+    "photos": [
+      {
+        "id": "p1",
+        "t": "image",
+        "at": "2024-06-01T10:00:00Z",
+        "w": 4000,
+        "h": 3000,
+        "cap": "Beach"
+      },
+      {
+        "id": "p2",
+        "t": "video",
+        "at": null,
+        "w": 1920,
+        "h": 1080,
+        "cap": ""
+      }
+    ]
+  },
+  "plaintext": "{\"name\":\"Trip 2024\",\"allowDownload\":false,\"photos\":[{\"id\":\"p1\",\"t\":\"image\",\"at\":\"2024-06-01T10:00:00Z\",\"w\":4000,\"h\":3000,\"cap\":\"Beach\"},{\"id\":\"p2\",\"t\":\"video\",\"at\":null,\"w\":1920,\"h\":1080,\"cap\":\"\"}]}",
+  "plaintextBytesHex": "7b226e616d65223a22547269702032303234222c22616c6c6f77446f776e6c6f6164223a66616c73652c2270686f746f73223a5b7b226964223a227031222c2274223a22696d616765222c226174223a22323032342d30362d30315431303a30303a30305a222c2277223a343030302c2268223a333030302c22636170223a224265616368227d2c7b226964223a227032222c2274223a22766964656f222c226174223a6e756c6c2c2277223a313932302c2268223a313038302c22636170223a22227d5d7d"
+}
