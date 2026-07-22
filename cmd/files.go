@@ -168,6 +168,7 @@ func downloadSingleFile(ctx context.Context, w io.Writer, client *api.Client, vk
 func newFilesUploadCommand() *cobra.Command {
 	var folder, remote string
 	var hidden bool
+	var batch int
 
 	cmd := &cobra.Command{
 		Use:   "upload",
@@ -177,7 +178,9 @@ func newFilesUploadCommand() *cobra.Command {
 			"  ledgerline-cli files upload /local/dir [--remote Target]        # a folder tree\n" +
 			"  ledgerline-cli files upload -f /local/dir [--remote Target]     # same, via flag\n\n" +
 			"A file already present with the same size is skipped; a changed file adds\n" +
-			"a new version. Hidden files (dotfiles) are skipped unless --hidden.",
+			"a new version. Hidden files (dotfiles) are skipped unless --hidden.\n" +
+			"Progress is saved every --batch uploads so an interrupted run keeps what\n" +
+			"it already stored.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := folder
@@ -190,17 +193,18 @@ func newFilesUploadCommand() *cobra.Command {
 			if src == "" {
 				return errors.New("a source file or folder is required")
 			}
-			return runFilesUpload(cmd, src, remote, hidden)
+			return runFilesUpload(cmd, src, remote, hidden, batch)
 		},
 	}
 	cmd.Flags().StringVarP(&folder, "folder", "f", "", "local source file or folder (alternative to the positional argument)")
 	cmd.Flags().StringVar(&remote, "remote", "", "remote target folder path (default: root)")
 	cmd.Flags().BoolVar(&hidden, "hidden", false, "include hidden files (dotfiles)")
+	cmd.Flags().IntVar(&batch, "batch", defaultBatch, "save progress after this many uploaded/updated files (0 = save once at the end)")
 	return cmd
 }
 
 // runFilesUpload walks the local folder and uploads changed/new files.
-func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) error {
+func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batch int) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
 
@@ -255,7 +259,22 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 		})
 	}
 
-	var created, updated, skipped, failed int
+	// saveBatch persists the store mid-run so an interrupted upload keeps what it
+	// already stored. context.WithoutCancel so a save started at the boundary
+	// finishes cleanly even if the parent context is being cancelled.
+	saveBatch := func() error {
+		if !store.Dirty() {
+			return nil
+		}
+		if bar.Active() {
+			bar.Println("  … saving progress")
+		} else {
+			fmt.Fprintln(w, "  … saving progress")
+		}
+		return store.Save(context.WithoutCancel(ctx))
+	}
+
+	var created, updated, skipped, failed, pending int
 	for i, lf := range locals {
 		if ctx.Err() != nil {
 			break
@@ -285,6 +304,7 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 				continue
 			}
 			updated++
+			pending++
 			if !bar.Active() {
 				fmt.Fprintf(w, "  [%d/%d] %s — updated\n", i+1, len(locals), lf.rel)
 			}
@@ -295,11 +315,19 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool) erro
 				continue
 			}
 			created++
+			pending++
 			if !bar.Active() {
 				fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", i+1, len(locals), lf.rel)
 			}
 		}
 		bar.Update(i+1, lf.rel)
+
+		if batch > 0 && pending >= batch {
+			if err := saveBatch(); err != nil {
+				return fmt.Errorf("save files: %w", err)
+			}
+			pending = 0
+		}
 	}
 	bar.Finish()
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `files upload --batch N`: save progress every N uploaded/updated files (default
+  50; `0` saves once at the end), so an interrupted upload keeps what it already
+  stored and a re-run resumes (same-size files are skipped) — matching
+  `gallery upload --batch`.
+
+### Security
+
+- The vault unlock now checks the host/cgroup memory ceiling before the Argon2id
+  key derivation and fails closed with a clear error when it cannot hold the
+  derivation, instead of risking an OOM kill mid-derivation on a memory-
+  constrained host or container.
+
 ## [0.7.0] - 2026-07-22
 
 Store v3: a clean-slate, post-quantum sealed-store upgrade shared with the web,

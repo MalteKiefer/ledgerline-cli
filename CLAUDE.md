@@ -186,13 +186,15 @@ No entry is past review. An expired entry blocks new work.
 
 Gaps against the operating manual's Definition of Done (honestly logged; none are
 correctness/interop defects — conformance is green):
-- Argon2 host/cgroup memory check before derivation + server-param safe-band
-  validation (§4a/§31). Owner: maintainer. Next: add guard in `crypto.DeriveKEK`
-  caller / vault unlock.
+- DONE 2026-07-22: Argon2 host/cgroup memory guard before derivation
+  (`internal/vault/memguard*.go`, wired into `Unlock`); server-param safe-band
+  validation already present (`validateKDF`). DONE: uniform decryption-failure
+  test (§28) + credential-directory 0700 test.
 - Fuzz tests for parsers (blob frame, manifest, canonical JSON decode, share
   links) — §11 manual. Not present yet.
-- Constant-time failure-duration test; credential-permission test (0600/0700);
-  no-secret-in-output test; memory-ceiling cgroup test at 18k — §11 manual.
+- Constant-time failure-DURATION (timing) test — statistical/flaky; deferred. The
+  deterministic part (uniform ErrDecrypt, subtle compares) is covered.
+  no-secret-in-output test; memory-ceiling cgroup INTEGRATION test at 18k — open.
 - Reconcile: the CLI does NOT call `/gallery|files/blobs/reconcile`; rebucket/
   changed-bucket re-seal leaves orphan blobs (safe — no data loss; server GC).
   If reconcile is ever added, the live-set MUST cover every ref class incl. the
@@ -233,7 +235,13 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` sec(crypto): hybrid KEM migrated to stdlib crypto/ecdh +
+- 2026-07-22 `<pending>` feat(files): `files upload --batch N` — periodic
+  progress save (crash-safe/resumable), matching gallery.
+- 2026-07-22 `0d8657f` sec(vault): Argon2id host/cgroup memory guard (fail
+  closed before an OOM kill on a memory-constrained host); uniform decryption
+  failure (§28) — truncated blob now returns ErrDecrypt like wrong-key/corrupt;
+  config-dir 0700 test.
+- 2026-07-22 `ddb44d3` sec(crypto): hybrid KEM migrated to stdlib crypto/ecdh +
   crypto/hkdf (manual §5, byte-compatible); add CLAUDE.md operating manual.
 - 2026-07-22 `a83121f` Store v3 Track C (C1–C6): canonical JSON, suite envelope +
   PQ hybrid KEM, content-addressed sharded gallery, partial records, per-module +
