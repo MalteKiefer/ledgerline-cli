@@ -49,7 +49,7 @@ func newMock(t *testing.T, pass string) *mock {
 			"kdf_ops": ops, "kdf_mem": mem, "wrapped_vault_key": wrapped.C, "wrap_nonce": wrapped.N,
 		})
 	})
-	mux.HandleFunc("/api/v1/store", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/store/todos", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if r.Method == http.MethodGet {

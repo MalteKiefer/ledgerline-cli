@@ -56,6 +56,7 @@ type Store struct {
 	client *api.Client
 	vk     []byte
 	label  string
+	module string // Store v3 per-module row: GET/PUT /store/{module}
 
 	order []string                  // collection keys, in registration order
 	specs map[string]CollectionSpec // key -> spec
@@ -66,13 +67,15 @@ type Store struct {
 	ops      []op
 }
 
-// New builds a store for the given collections. label names the module in error
-// messages.
-func New(client *api.Client, vaultKey []byte, label string, specs ...CollectionSpec) *Store {
+// New builds a store for the given collections held in one Store v3 per-module
+// row (GET/PUT /store/{module}). label names the module in error messages;
+// module is the server-allowlisted module key (e.g. "todos").
+func New(client *api.Client, vaultKey []byte, label, module string, specs ...CollectionSpec) *Store {
 	s := &Store{
 		client: client,
 		vk:     vaultKey,
 		label:  label,
+		module: module,
 		specs:  make(map[string]CollectionSpec, len(specs)),
 		base:   make(map[string][]json.RawMessage, len(specs)),
 	}
@@ -85,7 +88,7 @@ func New(client *api.Client, vaultKey []byte, label string, specs ...CollectionS
 
 // Load fetches and decrypts the workspace manifest and extracts each collection.
 func (s *Store) Load(ctx context.Context) error {
-	sealed, err := s.client.Store(ctx)
+	sealed, err := s.client.ModuleStore(ctx, s.module)
 	if err != nil {
 		return err
 	}
@@ -165,9 +168,12 @@ func (s *Store) saveOnce(ctx context.Context) error {
 		s.manifest[key] = raw
 		applied[key] = recs
 	}
-	if _, ok := s.manifest["v"]; !ok {
-		s.manifest["v"] = json.RawMessage("1")
+	// Store v3: the per-module row carries v:3 (canonical JSON + suite envelope
+	// are applied by crypto.SealManifest).
+	if s.manifest == nil {
+		s.manifest = map[string]json.RawMessage{}
 	}
+	s.manifest["v"] = json.RawMessage("3")
 
 	manifestJSON, err := json.Marshal(s.manifest)
 	if err != nil {
@@ -177,7 +183,7 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	newVersion, err := s.client.SaveStore(ctx, sealed, s.version)
+	newVersion, err := s.client.SaveModuleStore(ctx, s.module, sealed, s.version)
 	if err != nil {
 		return err
 	}
