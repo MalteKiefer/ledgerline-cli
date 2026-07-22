@@ -3,7 +3,11 @@ package crypto
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
+
+	"github.com/MalteKiefer/ledgerline-cli/internal/canonicaljson"
 )
 
 // ChunkSize is the plaintext slice size per secretstream message (4 MiB),
@@ -128,21 +132,39 @@ func DecryptContent(blob []byte, encFileKey string, vaultKey []byte) ([]byte, er
 	return out, nil
 }
 
-// SealManifest seals an already-serialised manifest JSON, padding it with
-// trailing spaces to the next 4 KiB boundary (size blurring; JSON parsers ignore
-// the padding) and returning the {"c","n"} JSON string for the store API.
+// SuiteV3 is the Store v3 crypto-suite id (§6.1). Every sealed manifest carries
+// it; an unknown suite fails closed (never guessed).
+const SuiteV3 = 1
+
+// sealedManifest is the v3 sealed-manifest envelope: {suite, c, n}.
+type sealedManifest struct {
+	Suite int    `json:"suite"`
+	C     string `json:"c"`
+	N     string `json:"n"`
+}
+
+// SealManifest seals a manifest into the Store v3 {suite,c,n} envelope (§6.1).
+// The input JSON is canonicalized (§5.2), padded with trailing spaces to a Padmé
+// bucket with a 4 KiB floor (size blurring; JSON parsers ignore the padding),
+// secretbox-sealed under the vault key, and tagged with the v3 suite.
 //
 // The web client computes the pad target from the JavaScript string length; here
 // it is the UTF-8 byte length. The difference only affects how much size blur is
 // applied, never decryptability — the sealed bytes still parse back to the same
-// object.
+// object (each client re-seals with a fresh random nonce, so manifest ciphertext
+// is never byte-pinned across clients).
 func SealManifest(manifestJSON []byte, vaultKey []byte) (string, error) {
-	const bucket = 4096
-	// ceil((len+1)/bucket) * bucket
-	target := ((len(manifestJSON) + 1 + bucket - 1) / bucket) * bucket
+	canon, err := canonicaljson.Canonicalize(manifestJSON)
+	if err != nil {
+		return "", fmt.Errorf("crypto: canonicalize manifest: %w", err)
+	}
+	target := PadmeSize(len(canon) + 1)
+	if target < 4096 {
+		target = 4096
+	}
 	padded := make([]byte, target)
-	copy(padded, manifestJSON)
-	for i := len(manifestJSON); i < target; i++ {
+	copy(padded, canon)
+	for i := len(canon); i < target; i++ {
 		padded[i] = ' '
 	}
 
@@ -150,14 +172,29 @@ func SealManifest(manifestJSON []byte, vaultKey []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return sealed.MarshalString()
+	env := sealedManifest{Suite: SuiteV3, C: sealed.C, N: sealed.N}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
-// OpenManifest reverses SealManifest, returning the raw (padded) manifest JSON.
+// OpenManifest reverses SealManifest, returning the raw (space-padded, canonical)
+// manifest JSON. It fails closed on an unknown suite tag — never guessing the
+// crypto stack (§6.1). A missing suite is tolerated (treated as the current
+// suite) to match the web client's openManifest.
 func OpenManifest(sealedString string, vaultKey []byte) ([]byte, error) {
-	sealed, err := ParseSealed(sealedString)
-	if err != nil {
+	var env struct {
+		Suite *int   `json:"suite"`
+		C     string `json:"c"`
+		N     string `json:"n"`
+	}
+	if err := json.Unmarshal([]byte(sealedString), &env); err != nil {
 		return nil, err
 	}
-	return Open(sealed, vaultKey)
+	if env.Suite != nil && *env.Suite != SuiteV3 {
+		return nil, fmt.Errorf("crypto: unknown sealed-manifest suite: %d", *env.Suite)
+	}
+	return Open(Sealed{C: env.C, N: env.N}, vaultKey)
 }

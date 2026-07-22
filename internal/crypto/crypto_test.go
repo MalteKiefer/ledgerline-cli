@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/nacl/secretbox"
@@ -199,27 +200,49 @@ func TestEncryptDecryptContentRoundTrip(t *testing.T) {
 
 func TestManifestSealRoundTripAndPadding(t *testing.T) {
 	vk := rep(0x0a, 32)
-	obj := []byte(`{"v":2,"photos":[{"id":"abc"}]}`)
+	// Input need not be canonical; SealManifest canonicalizes (§5.2): keys sorted.
+	obj := []byte(`{"v":3,"suite":1,"photos":[{"id":"abc"}]}`)
+	wantCanon := []byte(`{"photos":[{"id":"abc"}],"suite":1,"v":3}`)
 
 	sealedStr, err := SealManifest(obj, vk)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The v3 envelope carries the suite tag.
+	if !strings.Contains(sealedStr, `"suite":1`) {
+		t.Fatalf("sealed manifest missing suite tag: %s", sealedStr)
+	}
 	opened, err := OpenManifest(sealedStr, vk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Padded up to a 4 KiB boundary with spaces, decrypts to the original + pad.
-	if len(opened)%4096 != 0 {
-		t.Fatalf("padded length %d not a 4 KiB multiple", len(opened))
+	// Small manifests pad to the 4 KiB floor with spaces; decrypts to canonical + pad.
+	if len(opened) < 4096 {
+		t.Fatalf("padded length %d below 4 KiB floor", len(opened))
 	}
-	if !bytes.HasPrefix(opened, obj) {
-		t.Fatal("decrypted manifest lost its prefix")
+	if !bytes.HasPrefix(opened, wantCanon) {
+		t.Fatalf("decrypted manifest lost its canonical prefix: %q", opened[:len(wantCanon)])
 	}
-	for _, b := range opened[len(obj):] {
+	for _, b := range opened[len(wantCanon):] {
 		if b != ' ' {
 			t.Fatal("padding is not spaces")
 		}
+	}
+}
+
+func TestOpenManifestRejectsUnknownSuite(t *testing.T) {
+	vk := rep(0x0b, 32)
+	sealedStr, err := SealManifest([]byte(`{"v":3}`), vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the suite to an unknown value; open must fail closed.
+	tampered := strings.Replace(sealedStr, `"suite":1`, `"suite":2`, 1)
+	if tampered == sealedStr {
+		t.Fatal("failed to tamper suite for test")
+	}
+	if _, err := OpenManifest(tampered, vk); err == nil {
+		t.Fatal("expected OpenManifest to reject unknown suite")
 	}
 }
 

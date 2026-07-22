@@ -60,7 +60,7 @@ const (
 // when the file's signature already exists.
 func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome, *PhotoRecord, error) {
 	name := filepath.Base(item.StillPath)
-	sig := fileSig(plain)
+	sig := FileSig(plain)
 	if u.store.HasSig(sig) {
 		return Duplicate, nil, nil
 	}
@@ -308,8 +308,10 @@ func (u *Uploader) encStore(ctx context.Context, plain []byte) (ref, key string,
 	return ref, encKey, nil
 }
 
-// fileSig reproduces the web _fileSig: "<size>:<sha256 of head||tail 1 MiB>".
-func fileSig(data []byte) string {
+// FileSig reproduces the web fileSig (§6.5): "<size>:<sha256 of head‖tail 1 MiB>",
+// the cross-client dedup signature. The tail is empty when size ≤ 1 MiB so head
+// and tail never overlap-rehash the same region.
+func FileSig(data []byte) string {
 	h := sha256.New()
 	if len(data) <= sigCap {
 		h.Write(data)

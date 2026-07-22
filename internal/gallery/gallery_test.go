@@ -20,9 +20,9 @@ import (
 )
 
 func TestFileSig(t *testing.T) {
-	a := fileSig([]byte("hello world"))
-	b := fileSig([]byte("hello world"))
-	c := fileSig([]byte("hello worlD"))
+	a := FileSig([]byte("hello world"))
+	b := FileSig([]byte("hello world"))
+	c := FileSig([]byte("hello worlD"))
 	if a != b {
 		t.Fatal("same bytes must yield same signature")
 	}
