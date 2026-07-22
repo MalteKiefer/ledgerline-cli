@@ -421,10 +421,11 @@ ledgerline-cli files sync     --map remote:local [--map …] [flags]
 `files rm` trashes by default (restore in the web app); `--force` deletes
 permanently and reclaims blobs, and a folder needs `--recursive`.
 
-`files upload` shows a live progress bar (overall count plus per-file bytes) and
-saves progress every `--batch` uploads (default 50; `0` saves once at the end),
-so an interrupted run keeps what it already stored and a re-run skips it
-(same-size files are skipped).
+`files upload` uploads up to `--jobs` files in parallel (default 4; raise it for
+a big import over a fast link), shows a live progress bar, and saves progress
+every `--batch` uploads (default 50; `0` saves once at the end), so an
+interrupted run keeps what it already stored and a re-run skips it (same-size
+files are skipped).
 
 `files ls` shows a folder's contents colour-coded with a monochrome per-type icon
 (Nerd Font glyphs; use `--icons none` if your terminal font lacks them, and

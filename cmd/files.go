@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -168,7 +169,7 @@ func downloadSingleFile(ctx context.Context, w io.Writer, client *api.Client, vk
 func newFilesUploadCommand() *cobra.Command {
 	var folder, remote string
 	var hidden bool
-	var batch int
+	var batch, jobs int
 
 	cmd := &cobra.Command{
 		Use:   "upload",
@@ -193,18 +194,20 @@ func newFilesUploadCommand() *cobra.Command {
 			if src == "" {
 				return errors.New("a source file or folder is required")
 			}
-			return runFilesUpload(cmd, src, remote, hidden, batch)
+			return runFilesUpload(cmd, src, remote, hidden, batch, jobs)
 		},
 	}
 	cmd.Flags().StringVarP(&folder, "folder", "f", "", "local source file or folder (alternative to the positional argument)")
 	cmd.Flags().StringVar(&remote, "remote", "", "remote target folder path (default: root)")
 	cmd.Flags().BoolVar(&hidden, "hidden", false, "include hidden files (dotfiles)")
 	cmd.Flags().IntVar(&batch, "batch", defaultBatch, "save progress after this many uploaded/updated files (0 = save once at the end)")
+	cmd.Flags().IntVarP(&jobs, "jobs", "j", defaultJobs, "number of files to upload in parallel")
 	return cmd
 }
 
-// runFilesUpload walks the local folder and uploads changed/new files.
-func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batch int) error {
+// runFilesUpload walks the local folder and uploads changed/new files, up to
+// --jobs in parallel, saving progress every --batch files.
+func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batch, jobs int) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
 
@@ -236,109 +239,127 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batc
 	index := files.IndexByPath(store, remoteBase)
 	up := files.NewUploader(client, store, vk)
 
+	if jobs < 1 {
+		jobs = defaultJobs
+	}
+	fmt.Fprintf(w, "Uploading %d file(s), %d in parallel…\n", len(locals), jobs)
 	bar := ui.NewProgressBar(w, len(locals), term.IsTerminal(int(os.Stdout.Fd())))
 
-	// Live per-byte progress within the current file. The callback fires from the
-	// HTTP transport many times per second, so throttle redraws to ~20/s.
-	var curIdx int
-	var curRel string
-	var lastDraw time.Time
-	if bar.Active() {
-		up.SetProgress(func(sent, total int64) {
-			if total <= 0 {
-				return
-			}
-			now := time.Now()
-			done := sent >= total
-			if !done && now.Sub(lastDraw) < 50*time.Millisecond {
-				return
-			}
-			lastDraw = now
-			frac := float64(sent) / float64(total)
-			bar.UpdateFrac(curIdx, frac, fmt.Sprintf("%s %d%%", curRel, int(frac*100)))
-		})
-	}
+	r := &filesUploadRun{w: w, ctx: ctx, up: up, bar: bar, total: len(locals)}
 
-	// saveBatch persists the store mid-run so an interrupted upload keeps what it
-	// already stored. context.WithoutCancel so a save started at the boundary
-	// finishes cleanly even if the parent context is being cancelled. It draws
-	// into the progress bar's label (overwritten by the next file) rather than
-	// printing a scrolling line every batch.
-	saveBatch := func() error {
-		if !store.Dirty() {
-			return nil
-		}
-		if bar.Active() {
-			bar.Update(curIdx+1, "saving checkpoint…")
-		}
-		return store.Save(context.WithoutCancel(ctx))
+	// Process in batches; within a batch, up to `jobs` files upload concurrently
+	// (the slow network step). The manifest is saved once per batch boundary,
+	// when no worker is in flight, so an interrupted run keeps what it stored.
+	bsz := batch
+	if bsz < 1 {
+		bsz = len(locals)
 	}
-
-	var created, updated, skipped, failed, pending int
-	for i, lf := range locals {
+	for start := 0; start < len(locals); start += bsz {
 		if ctx.Err() != nil {
 			break
 		}
-		curIdx, curRel = i, lf.rel
-		// Draw the bar before the work so a slow upload shows the current file
-		// instead of a frozen screen.
-		bar.Update(i, lf.rel)
-		remotePath := joinRemote(remoteBase, lf.rel)
-		existing, exists := index[lf.rel]
-
-		data, rerr := os.ReadFile(lf.abs)
-		if rerr != nil {
-			failed++
-			bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, rerr))
-			continue
+		end := start + bsz
+		if end > len(locals) {
+			end = len(locals)
 		}
-		mimeType := mimeForName(lf.rel)
-
-		switch {
-		case exists && existing.View.Size == int64(len(data)):
-			skipped++
-		case exists:
-			if _, err := up.Replace(ctx, existing.View.ID, mimeType, data); err != nil {
-				failed++
-				bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, err))
-				continue
+		r.processBatch(locals[start:end], index, remoteBase, jobs)
+		if store.Dirty() {
+			if bar.Active() {
+				bar.Update(r.doneCount(), "saving checkpoint…")
 			}
-			updated++
-			pending++
-			if !bar.Active() {
-				fmt.Fprintf(w, "  [%d/%d] %s — updated\n", i+1, len(locals), lf.rel)
-			}
-		default:
-			if _, _, err := up.Create(ctx, remotePath, mimeType, nowISO(), data); err != nil {
-				failed++
-				bar.Println(fmt.Sprintf("  %s — failed: %v", lf.rel, err))
-				continue
-			}
-			created++
-			pending++
-			if !bar.Active() {
-				fmt.Fprintf(w, "  [%d/%d] %s — uploaded\n", i+1, len(locals), lf.rel)
-			}
-		}
-		bar.Update(i+1, lf.rel)
-
-		if batch > 0 && pending >= batch {
-			if err := saveBatch(); err != nil {
+			if err := store.Save(context.WithoutCancel(ctx)); err != nil {
 				return fmt.Errorf("save files: %w", err)
 			}
-			pending = 0
 		}
 	}
 	bar.Finish()
-
-	if store.Dirty() {
-		fmt.Fprintln(w, "Saving…")
-		if err := store.Save(context.WithoutCancel(ctx)); err != nil {
-			return fmt.Errorf("save files: %w", err)
-		}
-	}
-	fmt.Fprintf(w, "Done: %d uploaded, %d updated, %d skipped, %d failed.\n", created, updated, skipped, failed)
+	fmt.Fprintf(w, "Done: %d uploaded, %d updated, %d skipped, %d failed.\n", r.created, r.updated, r.skipped, r.failed)
 	return nil
+}
+
+// filesUploadRun holds the shared, concurrently-updated state of a parallel files
+// upload: counters, the progress bar and the file-done count.
+type filesUploadRun struct {
+	w     io.Writer
+	ctx   context.Context
+	up    *files.Uploader
+	bar   *ui.ProgressBar
+	total int
+
+	mu                                      sync.Mutex
+	done, created, updated, skipped, failed int
+}
+
+func (r *filesUploadRun) doneCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.done
+}
+
+// processBatch uploads a batch of files using up to jobs concurrent workers and
+// returns once all of them finish (the barrier before a save).
+func (r *filesUploadRun) processBatch(batch []localFile, index map[string]files.Entry, remoteBase string, jobs int) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, jobs)
+	for _, lf := range batch {
+		if r.ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(lf localFile) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			r.one(lf, index, remoteBase)
+		}(lf)
+	}
+	wg.Wait()
+}
+
+// one uploads a single file. The slow network steps run unlocked; only the shared
+// counters, output and progress bar are guarded.
+func (r *filesUploadRun) one(lf localFile, index map[string]files.Entry, remoteBase string) {
+	if r.ctx.Err() != nil {
+		return
+	}
+	data, rerr := os.ReadFile(lf.abs)
+	if rerr != nil {
+		r.record(lf.rel, "failed: "+rerr.Error(), &r.failed)
+		return
+	}
+	mimeType := mimeForName(lf.rel)
+	existing, exists := index[lf.rel]
+
+	switch {
+	case exists && existing.View.Size == int64(len(data)):
+		r.record(lf.rel, "", &r.skipped)
+	case exists:
+		if _, err := r.up.Replace(r.ctx, existing.View.ID, mimeType, data); err != nil {
+			r.record(lf.rel, "failed: "+err.Error(), &r.failed)
+			return
+		}
+		r.record(lf.rel, "updated", &r.updated)
+	default:
+		if _, _, err := r.up.Create(r.ctx, joinRemote(remoteBase, lf.rel), mimeType, nowISO(), data); err != nil {
+			r.record(lf.rel, "failed: "+err.Error(), &r.failed)
+			return
+		}
+		r.record(lf.rel, "uploaded", &r.created)
+	}
+}
+
+// record bumps a counter and advances the progress bar (or prints a line when the
+// bar is inactive). Safe to call from several workers at once.
+func (r *filesUploadRun) record(rel, note string, counter *int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	*counter++
+	r.done++
+	if r.bar.Active() {
+		r.bar.Update(r.done, rel)
+	} else if note != "" {
+		fmt.Fprintf(r.w, "  [%d/%d] %s — %s\n", r.done, r.total, rel, note)
+	}
 }
 
 // localFile is a discovered local file with its path relative to the walk root.

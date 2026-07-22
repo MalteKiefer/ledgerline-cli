@@ -273,7 +273,10 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` gallery/files: reclaim freed shard/collection blobs
+- 2026-07-22 `<pending>` feat(files): parallel `files upload --jobs` (bounded
+  worker pool; slow network step unlocked, tree+ops staging serialized via
+  Uploader.stageMu; batch-barrier save). Race-clean.
+- 2026-07-22 `8839273` gallery/files: reclaim freed shard/collection blobs
   after a successful re-seal (no orphan accumulation; no full-reconcile).
 - 2026-07-22 `72e5aa9` supply-chain: CycloneDX SBOM (committed + CI diff),
   reproducible-build verification (deterministic commit-date BUILD_DATE).
