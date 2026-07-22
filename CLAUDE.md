@@ -222,8 +222,11 @@ correctness/interop defects — conformance is green):
 - Perf: ETag/304 + a decrypted-shard disk cache not yet used on cold load
   (`/raw-batch` IS now used for the cold shard fetch). ETag/disk-cache is a
   larger persistent-cache feature — still open.
-- Supply chain: SBOM per build + diff, reproducible-build verification, signed
-  commits/tags enforcement, two-person-review gate — not yet wired in CI (§20).
+- DONE 2026-07-22: SBOM (CycloneDX, `make sbom` → committed `sbom.json`) diffed
+  in CI (`make sbom-verify`); reproducible-build verification in CI
+  (`make repro-verify`, BUILD_DATE pinned to the commit date). Still open:
+  signed-commits/tags enforcement + two-person-review gate (org/branch-protection
+  policy, not enforceable from the repo tree).
 - On-device derivation (JPEG/PNG thumb, local exiftool EXIF) not implemented;
   the CLI floor writes partial records for GUI backfill (spec-optional §8.1).
 - TLS MinVersion raise to 1.3 where deployments allow (§11 register item).
@@ -257,7 +260,9 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` perf/sec: raw-batch cold shard load (gallery+files); TLS
+- 2026-07-22 `<pending>` supply-chain: CycloneDX SBOM (committed + CI diff),
+  reproducible-build verification (deterministic commit-date BUILD_DATE).
+- 2026-07-22 `db03e22` perf/sec: raw-batch cold shard load (gallery+files); TLS
   1.3 floor; constant-time failure floor on unlock/recovery.
 - 2026-07-22 `04b4161` fix(gallery): tag embModel from the server-returned CLIP
   `model` (/process) per web `6f3c8f2e` (§8.5 cross-client search coherence).

@@ -1,0 +1,375 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-22T07:28:52+02:00",
+    "tools": [
+      {
+        "vendor": "CycloneDX",
+        "name": "cyclonedx-gomod",
+        "version": "v1.10.0",
+        "hashes": [
+          {
+            "alg": "MD5",
+            "content": "34be59c1934f4e22f22eadc27dc211d5"
+          },
+          {
+            "alg": "SHA-1",
+            "content": "6152f70aa40043df7c7be029adb8f5b7fc657aec"
+          },
+          {
+            "alg": "SHA-256",
+            "content": "2cb593e2291911ae7fd90de4658ea421a4fd9529010aac08042b2b0f67ea1573"
+          },
+          {
+            "alg": "SHA-384",
+            "content": "fe23e715b75378d04a45024d707db95be49963d52df67f6d80d7c58440708e4f08b38b4cc7ed4fab72efcb9e60d97714"
+          },
+          {
+            "alg": "SHA-512",
+            "content": "d1cf1b37dbdbc47cbb2654f2a30f04094b82f765a30238e6c0a66305c2c97d09508d4629e146ac174f2dd6beac1e220c380fab7b9c9eb5cecf94a6d47e2b12e9"
+          }
+        ],
+        "externalReferences": [
+          {
+            "url": "https://github.com/CycloneDX/cyclonedx-gomod",
+            "type": "vcs"
+          },
+          {
+            "url": "https://cyclonedx.org",
+            "type": "website"
+          }
+        ]
+      }
+    ],
+    "component": {
+      "bom-ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.2-0.20260722051155-4d5a5202a40a?type=module",
+      "type": "application",
+      "name": "github.com/MalteKiefer/ledgerline-cli",
+      "version": "v0.7.2-0.20260722051155-4d5a5202a40a",
+      "purl": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.2-0.20260722051155-4d5a5202a40a?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/MalteKiefer/ledgerline-cli",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "MIT"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?type=module",
+      "type": "library",
+      "name": "github.com/danieljoos/wincred",
+      "version": "v1.2.3",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bfb7590b6c77d94b779c47d11febe1a191af37bdbe750fec9d55e8fef3052dd4"
+        }
+      ],
+      "purl": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/danieljoos/wincred",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "MIT"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?type=module",
+      "type": "library",
+      "name": "github.com/godbus/dbus/v5",
+      "version": "v5.2.2",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4d44774e0b525439a38973a0000c9a65b62621e3f70cf9257778e028657c9974"
+        }
+      ],
+      "purl": "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/godbus/dbus",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-2-Clause"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?type=module",
+      "type": "library",
+      "name": "github.com/inconshreveable/mousetrap",
+      "version": "v1.1.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c0dfb1e0d546a4cb0eec4ad49ff994237bc4a04e89b75dd7dacd1bab0a7db5cf"
+        }
+      ],
+      "purl": "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/inconshreveable/mousetrap",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "Apache-2.0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
+      "type": "library",
+      "name": "github.com/spf13/cobra",
+      "version": "v1.10.2",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0cc4d3a27c799bae4873418ea11636735e9609b1f138ec3ac717b3b8b681a5c5"
+        }
+      ],
+      "purl": "pkg:golang/github.com/spf13/cobra@v1.10.2?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/spf13/cobra",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "Apache-2.0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/spf13/pflag@v1.0.10?type=module",
+      "type": "library",
+      "name": "github.com/spf13/pflag",
+      "version": "v1.0.10",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e04061d8a01807068e363e9bd987b51a21dfc23ab244ea05e11c183bebcfc059"
+        }
+      ],
+      "purl": "pkg:golang/github.com/spf13/pflag@v1.0.10?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/spf13/pflag",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-3-Clause"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
+      "type": "library",
+      "name": "github.com/zalando/go-keyring",
+      "version": "v0.2.8",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "eac0ff51ca65ee336ad74accda982a4ecd2c67d577a8caea7c8232e583dc707b"
+        }
+      ],
+      "purl": "pkg:golang/github.com/zalando/go-keyring@v0.2.8?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/zalando/go-keyring",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "MIT"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.54.0?type=module",
+      "type": "library",
+      "name": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "60b200e7d2b87e23731f38e766ddad50942342d5167d66de1c1a8ab64dde49cc"
+        }
+      ],
+      "purl": "pkg:golang/golang.org/x/crypto@v0.54.0?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-Source-Code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
+      "type": "library",
+      "name": "golang.org/x/sys",
+      "version": "v0.47.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a3b5c63af6500800c1410e18ed536ad9d456411ec998e516f0ac71e19b0d816b"
+        }
+      ],
+      "purl": "pkg:golang/golang.org/x/sys@v0.47.0?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-Source-Code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/golang.org/x/term@v0.45.0?type=module",
+      "type": "library",
+      "name": "golang.org/x/term",
+      "version": "v0.45.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3705b2066a0909b7d31e9c6b5a867d0bafd5c4e7fb89cdb5f48f3165915dadfd"
+        }
+      ],
+      "purl": "pkg:golang/golang.org/x/term@v0.45.0?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-Source-Code"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.2-0.20260722051155-4d5a5202a40a?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
+        "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
+        "pkg:golang/golang.org/x/crypto@v0.54.0?type=module",
+        "pkg:golang/golang.org/x/term@v0.45.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?type=module"
+    },
+    {
+      "ref": "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?type=module",
+        "pkg:golang/github.com/spf13/pflag@v1.0.10?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/spf13/pflag@v1.0.10?type=module"
+    },
+    {
+      "ref": "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/danieljoos/wincred@v1.2.3?type=module",
+        "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?type=module",
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/golang.org/x/crypto@v0.54.0?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
+        "pkg:golang/golang.org/x/term@v0.45.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+    },
+    {
+      "ref": "pkg:golang/golang.org/x/term@v0.45.0?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    }
+  ]
+}
