@@ -11,10 +11,33 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
 )
+
+// failFloor is the minimum wall-clock duration a failed secret check takes,
+// measured on the monotonic clock. It gives wrong-passphrase / wrong-recovery
+// failures a uniform floor (no timing oracle, §28) and a brute-force speed bump
+// (§23). Argon2id already dominates a normal unlock, so this only actually delays
+// the fast paths (e.g. recovery, which uses a cheap KDF).
+const failFloor = 750 * time.Millisecond
+
+// padFailure blocks until at least failFloor has elapsed since start, honouring
+// context cancellation (a cancelled context returns promptly).
+func padFailure(ctx context.Context, start time.Time) {
+	remaining := failFloor - time.Since(start)
+	if remaining <= 0 {
+		return
+	}
+	t := time.NewTimer(remaining)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
 
 // ErrNotConfigured means the account has no vault yet (nothing to unlock).
 var ErrNotConfigured = errors.New("vault: not configured for this account")
@@ -25,6 +48,7 @@ var ErrWrongPassphrase = errors.New("vault: wrong passphrase")
 // Unlock derives the key-encryption key from the passphrase and the server's
 // public KDF parameters, then unwraps and returns the 32-byte vault key.
 func Unlock(ctx context.Context, client *api.Client, passphrase string) ([]byte, error) {
+	start := time.Now()
 	status, err := client.Vault(ctx)
 	if err != nil {
 		return nil, err
@@ -49,6 +73,7 @@ func Unlock(ctx context.Context, client *api.Client, passphrase string) ([]byte,
 	kek := crypto.DeriveKEK(passphrase, salt, status.KdfOps, status.KdfMem)
 	vk, err := crypto.Open(crypto.Sealed{C: status.WrappedVaultKey, N: status.WrapNonce}, kek)
 	if err != nil {
+		padFailure(ctx, start)
 		return nil, ErrWrongPassphrase
 	}
 	return vk, nil
@@ -79,6 +104,7 @@ func validateKDF(ops, memBytes uint64) error {
 // RecoverWithCode unlocks the vault with the high-entropy recovery code instead
 // of the passphrase (spaces are ignored), matching vault.js recover().
 func RecoverWithCode(ctx context.Context, client *api.Client, recoveryCodeHex string) ([]byte, error) {
+	start := time.Now()
 	status, err := client.Vault(ctx)
 	if err != nil {
 		return nil, err
@@ -94,6 +120,9 @@ func RecoverWithCode(ctx context.Context, client *api.Client, recoveryCodeHex st
 	recoveryKey := crypto.GenericHashKey(recoveryBytes)
 	vk, err := crypto.Open(crypto.Sealed{C: status.WrappedVaultKeyRecovery, N: status.RecoveryNonce}, recoveryKey)
 	if err != nil {
+		// Cheap KDF here, so the floor is what actually rate-limits a brute force
+		// and removes the timing oracle (§23/§28).
+		padFailure(ctx, start)
 		return nil, errors.New("vault: wrong recovery code")
 	}
 	return vk, nil

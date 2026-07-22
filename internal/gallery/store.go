@@ -115,11 +115,16 @@ func (s *Store) Load(ctx context.Context) error {
 // shard aborts the load rather than silently dropping photos (a partial set could
 // be saved and would free the "missing" shard, losing data for good).
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
+	batched := s.prefetchShards(ctx, shards)
 	var photos []json.RawMessage
 	for i, sh := range shards {
-		blob, err := s.fetchShardWithRetry(ctx, sh.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("fetch shard %d/%d (%s): %w", i+1, len(shards), sh.Ref, err)
+		blob, ok := batched[sh.Ref]
+		if !ok {
+			var err error
+			blob, err = s.fetchShardWithRetry(ctx, sh.Ref)
+			if err != nil {
+				return nil, fmt.Errorf("fetch shard %d/%d (%s): %w", i+1, len(shards), sh.Ref, err)
+			}
 		}
 		plain, err := crypto.DecryptContent(blob, sh.Key, s.vk)
 		if err != nil {
@@ -132,6 +137,27 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 		photos = append(photos, arr...)
 	}
 	return photos, nil
+}
+
+// prefetchShards fetches all shard ciphertexts in one raw-batch round-trip to cut
+// cold-load latency (§10). Best-effort: on any error, or for a single shard, it
+// returns whatever it got (possibly empty) and the caller falls back to a
+// per-blob GET (which retries). A ref the server omitted is simply absent here.
+func (s *Store) prefetchShards(ctx context.Context, shards []shardDesc) map[string][]byte {
+	if len(shards) < 2 {
+		return nil
+	}
+	refs := make([]string, 0, len(shards))
+	for _, sh := range shards {
+		if sh.Ref != "" {
+			refs = append(refs, sh.Ref)
+		}
+	}
+	batched, err := s.client.GetGalleryBlobsBatch(ctx, refs)
+	if err != nil {
+		return nil
+	}
+	return batched
 }
 
 // fetchShardWithRetry fetches a shard blob, retrying a few times on a transient
@@ -369,10 +395,35 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The new root is now authoritative; shard blobs it no longer references are
+	// safe to reclaim. Best-effort AFTER the successful PUT — an interrupted or
+	// failed delete just leaves a harmless orphan, never data loss.
+	freed := freedShardRefs(s.shards, descriptors)
 	s.version = newVersion
 	s.shards = descriptors
 	s.shardBits = shardBits
+	for _, ref := range freed {
+		_ = s.client.DeleteGalleryBlob(ctx, ref)
+	}
 	return nil
+}
+
+// freedShardRefs returns the refs present in old but absent from the new
+// descriptors — shard blobs the re-sealed root no longer references.
+func freedShardRefs(old, next []shardDesc) []string {
+	live := make(map[string]bool, len(next))
+	for _, d := range next {
+		if d.Ref != "" {
+			live[d.Ref] = true
+		}
+	}
+	var freed []string
+	for _, d := range old {
+		if d.Ref != "" && !live[d.Ref] {
+			freed = append(freed, d.Ref)
+		}
+	}
+	return freed
 }
 
 // buildRoot assembles the sealed v3 root: it sets v/suite/shardBits/shards and

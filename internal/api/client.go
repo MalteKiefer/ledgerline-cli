@@ -118,12 +118,14 @@ func installPinning(hc *http.Client, host string, p CertPinner) {
 	}
 }
 
-// hardenedClient builds the default HTTP client: TLS 1.2+ and a redirect policy
-// that refuses scheme downgrades and cross-host hops (the API is single-origin,
-// so the bearer and any transient plaintext must never follow a redirect off it).
+// hardenedClient builds the default HTTP client: TLS 1.3 only and a redirect
+// policy that refuses scheme downgrades and cross-host hops (the API is
+// single-origin, so the bearer and any transient plaintext must never follow a
+// redirect off it). TLS 1.3 is the mandated floor; loopback http is still allowed
+// for local development (handled by the redirect/scheme checks, not here).
 func hardenedClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 	return &http.Client{
 		Timeout:   DefaultTimeout,
 		Transport: transport,

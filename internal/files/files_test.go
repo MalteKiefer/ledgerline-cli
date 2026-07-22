@@ -30,6 +30,7 @@ type mock struct {
 	store   string
 	version int64
 	blobs   map[string][]byte
+	deleted []string
 	seq     int
 }
 
@@ -118,6 +119,11 @@ func newMock(t *testing.T, pass string) *mock {
 		w.Write(data)
 	})
 	mux.HandleFunc("/api/v1/files/blob/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/files/blob/")
+		m.mu.Lock()
+		m.deleted = append(m.deleted, id)
+		delete(m.blobs, id)
+		m.mu.Unlock()
 		w.Write([]byte(`{"deleted":true}`))
 	})
 
@@ -670,5 +676,65 @@ func TestUploadStoresNoPlaintextOrKey(t *testing.T) {
 	}
 	if bytes.Contains([]byte(m.store), marker) {
 		t.Fatal("sealed root leaked plaintext")
+	}
+}
+
+func TestFreedShardRefs(t *testing.T) {
+	old := []shardDesc{{Ref: "a", Bucket: 0}, {Ref: "b", Bucket: 1}}
+	next := []shardDesc{{Ref: "b", Bucket: 1}, {Ref: "c", Bucket: 2}}
+	freed := freedShardRefs(old, next)
+	if len(freed) != 1 || freed[0] != "a" {
+		t.Fatalf("freedShardRefs = %v want [a]", freed)
+	}
+	if len(freedShardRefs(next, next)) != 0 {
+		t.Fatal("unchanged set must free nothing")
+	}
+}
+
+// TestReSealReclaimsFreedShard verifies a content-changing re-seal reclaims the
+// old shard blob the new root no longer references (no orphan accumulation), and
+// never deletes a blob the root still points at.
+func TestReSealReclaimsFreedShard(t *testing.T) {
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, err := vault.Unlock(ctx, client, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed one file; its record shard blob is "b1".
+	m.seedFiles(t, []any{
+		map[string]any{"id": "0f00", "name": "a.txt", "blob": "content", "encFileKey": "{}", "size": 5, "folder": nil},
+	}, []any{}, nil)
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Mutate the record so the shard's canonical content changes → re-seal under a
+	// new ref, freeing the old shard blob "b1".
+	store.TrashFile("0f00", "2021-02-02T00:00:00Z")
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, id := range m.deleted {
+		if id == "b1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("old shard blob b1 was not reclaimed; deleted=%v", m.deleted)
+	}
+	// The current shard descriptor's ref must NOT have been deleted.
+	for _, sh := range store.shards {
+		for _, id := range m.deleted {
+			if id == sh.Ref {
+				t.Fatalf("deleted a live shard ref %s", sh.Ref)
+			}
+		}
 	}
 }

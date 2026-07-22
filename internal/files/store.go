@@ -145,11 +145,16 @@ func (s *Store) Load(ctx context.Context) error {
 // loadShards downloads, decrypts and concatenates every shard's file records. A
 // failed shard aborts the load rather than silently dropping records.
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
+	batched := s.prefetchShards(ctx, shards)
 	var recs []json.RawMessage
 	for i, sh := range shards {
-		blob, err := s.fetchBlobWithRetry(ctx, sh.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
+		blob, ok := batched[sh.Ref]
+		if !ok {
+			var err error
+			blob, err = s.fetchBlobWithRetry(ctx, sh.Ref)
+			if err != nil {
+				return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
+			}
 		}
 		plain, err := crypto.DecryptContent(blob, sh.Key, s.vk)
 		if err != nil {
@@ -179,6 +184,26 @@ func (s *Store) loadCollection(ctx context.Context, ref, key string) ([]json.Raw
 		return nil, fmt.Errorf("parse files collection blob: %w", err)
 	}
 	return arr, nil
+}
+
+// prefetchShards fetches all file-record shard ciphertexts in one raw-batch
+// round-trip (§10). Best-effort: on error or a single shard it returns nil and
+// the caller falls back to a per-blob GET; an omitted ref is simply absent.
+func (s *Store) prefetchShards(ctx context.Context, shards []shardDesc) map[string][]byte {
+	if len(shards) < 2 {
+		return nil
+	}
+	refs := make([]string, 0, len(shards))
+	for _, sh := range shards {
+		if sh.Ref != "" {
+			refs = append(refs, sh.Ref)
+		}
+	}
+	batched, err := s.client.GetFilesBlobsBatch(ctx, refs)
+	if err != nil {
+		return nil
+	}
+	return batched
 }
 
 // fetchBlobWithRetry fetches a blob, retrying on transient failures (a fresh
@@ -321,6 +346,13 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Reclaim blobs the new root no longer references (best-effort, after the
+	// successful PUT — an interrupted delete leaves a harmless orphan, never data
+	// loss): freed record shards plus a replaced folders collection blob.
+	freed := freedShardRefs(s.shards, descriptors)
+	if s.foldersDesc != nil && s.foldersDesc.Ref != "" && (foldersDesc == nil || foldersDesc.Ref != s.foldersDesc.Ref) {
+		freed = append(freed, s.foldersDesc.Ref)
+	}
 	s.version = newVersion
 	s.shards = descriptors
 	s.shardBits = shardBits
@@ -328,7 +360,28 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	// Fold the applied ops into the base so a subsequent Save starts clean.
 	s.baseFiles = files
 	s.baseFolders = folders
+	for _, ref := range freed {
+		_ = s.client.DeleteFileBlob(ctx, ref)
+	}
 	return nil
+}
+
+// freedShardRefs returns refs present in old but absent from next — shard blobs
+// the re-sealed root no longer references.
+func freedShardRefs(old, next []shardDesc) []string {
+	live := make(map[string]bool, len(next))
+	for _, d := range next {
+		if d.Ref != "" {
+			live[d.Ref] = true
+		}
+	}
+	var freed []string
+	for _, d := range old {
+		if d.Ref != "" && !live[d.Ref] {
+			freed = append(freed, d.Ref)
+		}
+	}
+	return freed
 }
 
 // buildShards buckets file records by id, re-seals only the buckets whose

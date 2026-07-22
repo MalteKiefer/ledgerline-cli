@@ -64,6 +64,12 @@ func (c *Client) GetGalleryBlob(ctx context.Context, id string) ([]byte, error) 
 	return c.getBlob(ctx, "/api/v1/gallery/raw/"+id)
 }
 
+// DeleteGalleryBlob removes a gallery blob (idempotent server-side). Used to
+// reclaim a shard blob the root no longer references after a re-seal.
+func (c *Client) DeleteGalleryBlob(ctx context.Context, id string) error {
+	return c.deleteBlob(ctx, "/api/v1/gallery/blob/"+id)
+}
+
 // ProcessFace is one detected face in a ProcessResult.
 type ProcessFace struct {
 	Score     float64   `json:"score"`

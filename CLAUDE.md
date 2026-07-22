@@ -135,8 +135,9 @@ called. Toolchain: go 1.25.0 directive, toolchain pinned go1.26.5 (GO-2026-5856)
 - **Hashing:** SHA-256 only for shard bucket hash = `SHA-256(canonicalJSON(recs))`.
 - **Randomness:** crypto/rand only (keys, nonces, ids, padding); ids = 128-bit hex.
 - **Comparison:** secret comparisons via crypto/subtle (secretstream MAC compare).
-- **Transport:** TLS ≥ 1.2 today (see §11 register), cert verification always on,
-  TOFU pinning (certpin). No InsecureSkipVerify.
+- **Transport:** TLS 1.3 floor (`MinVersion: VersionTLS13`), cert verification
+  always on, TOFU pinning (certpin). No InsecureSkipVerify. Loopback http allowed
+  for local dev only.
 
 RFCs: 8446 (TLS), 9106 (Argon2), 5869 (HKDF), FIPS 203 (ML-KEM), 7748 (X25519),
 8259 (JSON).
@@ -187,7 +188,6 @@ RFCs: 8446 (TLS), 9106 (Argon2), 5869 (HKDF), FIPS 203 (ML-KEM), 7748 (X25519),
 | Classical passkey signatures (platform) | platform | WebAuthn RP ecosystem lacks PQ COSE; auth not HNDL-confidentiality | private JWK sealed under VK (PQ-safe at rest) | 2026-10-01 |
 | Classical TLS beyond the ZK boundary | maintainer | only ciphertext transits | ZK payload + cert pinning (certpin) | 2026-10-01 |
 | Plaintext token 0600-file fallback when no OS keyring | maintainer | headless/SSH hosts have no Secret Service | 0600 in 0700 dir; `auth status` reports backend; logout shreds | 2026-10-01 |
-| TLS floor is 1.2 (loopback http allowed) not enforced 1.3 | maintainer | server/deploy compatibility | verification on; pinning; §12 item to raise to 1.3 | 2026-09-01 |
 
 No entry is past review. An expired entry blocks new work.
 
@@ -207,17 +207,28 @@ correctness/interop defects — conformance is green):
 - DONE 2026-07-22: no-secret-in-output — crypto error strings carry no key
   material (`TestNoSecretInErrorStrings`); a real upload flow stores only
   ciphertext (`files.TestUploadStoresNoPlaintextOrKey`).
-- Constant-time failure-DURATION (timing) test — statistical/flaky; deferred. The
-  deterministic part (uniform ErrDecrypt, subtle compares) is covered.
+- DONE 2026-07-22: constant-time failure FLOOR — `vault.padFailure` pads a
+  wrong-passphrase / wrong-recovery failure to a 750 ms monotonic floor
+  (uniform-duration + brute-force speed bump, §23/§28); tested (floor applied,
+  no over-sleep when already elapsed, prompt on context cancel). A full
+  statistical timing-distribution test is still deferred (flaky).
 - memory-ceiling cgroup INTEGRATION test at 18k (the guard's parsers are
   unit-tested; a real-cgroup run is CI infra) — open.
-- Reconcile: the CLI does NOT call `/gallery|files/blobs/reconcile`; rebucket/
-  changed-bucket re-seal leaves orphan blobs (safe — no data loss; server GC).
-  If reconcile is ever added, the live-set MUST cover every ref class incl. the
-  interrupted-run case (§17 spec / §4a).
-- Perf: `/raw-batch` + ETag/304 not used on cold shard load (optional perf).
-- Supply chain: SBOM per build + diff, reproducible-build verification, signed
-  commits/tags enforcement, two-person-review gate — not yet wired in CI (§20).
+- DONE 2026-07-22: the CLI now reclaims its OWN freed blobs after a successful
+  re-seal — freed record shards (both stores) + a replaced folders collection
+  blob (files) are DELETEd, but only after the new root PUT succeeds (an
+  interrupted/failed delete leaves a harmless orphan, never data loss). This is
+  targeted and safe; the CLI still does NOT trigger the destructive full-live-set
+  `/blobs/reconcile` sweep — that decision is in §13.
+- DONE 2026-07-22: TLS floor raised to 1.3 (`MinVersion: VersionTLS13`).
+- Perf: ETag/304 + a decrypted-shard disk cache not yet used on cold load
+  (`/raw-batch` IS now used for the cold shard fetch). ETag/disk-cache is a
+  larger persistent-cache feature — still open.
+- DONE 2026-07-22: SBOM (CycloneDX, `make sbom` → committed `sbom.json`) diffed
+  in CI (`make sbom-verify`); reproducible-build verification in CI
+  (`make repro-verify`, BUILD_DATE pinned to the commit date). Still open:
+  signed-commits/tags enforcement + two-person-review gate (org/branch-protection
+  policy, not enforceable from the repo tree).
 - On-device derivation (JPEG/PNG thumb, local exiftool EXIF) not implemented;
   the CLI floor writes partial records for GUI backfill (spec-optional §8.1).
 - TLS MinVersion raise to 1.3 where deployments allow (§11 register item).
@@ -242,6 +253,17 @@ correctness/interop defects — conformance is green):
   deterministic `ct/dk` KAT values are validated JS-side; Go pins `ekSha256`
   (seed→ek, matches @noble exactly) + a live encaps→decaps round-trip.
 
+- **Full-live-set reconcile is intentionally NOT triggered by the CLI**
+  (2026-07-22). `/gallery|files/blobs/reconcile` GC-sweeps every blob NOT in a
+  caller-supplied live-set; a live-set missing any ref class (incl. face-crop
+  refs that live in cold meta blobs) = server-side data loss (§17/§4a). The CLI
+  has no need for it — it reclaims its own freed shard/collection blobs directly
+  (§12), and orphaned blobs are harmless. Implementing a full reconcile would add
+  a destructive path whose correctness depends on decrypting every meta blob to
+  gather crop refs; the risk outweighs the benefit for the capability floor.
+  Escalate before adding it: it needs the complete live-set + the interrupted-run
+  blocking test the spec mandates.
+
 ## 14. Deviations  [LIVING]
 
 - ML-KEM KAT verification is split (see §13) — a documented, spec-consistent
@@ -251,7 +273,13 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` fix(gallery): tag embModel from the server-returned CLIP
+- 2026-07-22 `<pending>` gallery/files: reclaim freed shard/collection blobs
+  after a successful re-seal (no orphan accumulation; no full-reconcile).
+- 2026-07-22 `72e5aa9` supply-chain: CycloneDX SBOM (committed + CI diff),
+  reproducible-build verification (deterministic commit-date BUILD_DATE).
+- 2026-07-22 `db03e22` perf/sec: raw-batch cold shard load (gallery+files); TLS
+  1.3 floor; constant-time failure floor on unlock/recovery.
+- 2026-07-22 `04b4161` fix(gallery): tag embModel from the server-returned CLIP
   `model` (/process) per web `6f3c8f2e` (§8.5 cross-client search coherence).
 - 2026-07-22 `<merged>` test: fuzz parsers + no-secret-in-output; fix(files):
   quiet per-batch checkpoint.
