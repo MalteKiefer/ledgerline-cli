@@ -235,7 +235,9 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` sec(vault): Argon2id host/cgroup memory guard (fail
+- 2026-07-22 `<pending>` feat(files): `files upload --batch N` — periodic
+  progress save (crash-safe/resumable), matching gallery.
+- 2026-07-22 `0d8657f` sec(vault): Argon2id host/cgroup memory guard (fail
   closed before an OOM kill on a memory-constrained host); uniform decryption
   failure (§28) — truncated blob now returns ErrDecrypt like wrong-key/corrupt;
   config-dir 0700 test.
