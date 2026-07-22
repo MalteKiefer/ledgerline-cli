@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -624,4 +625,50 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// TestUploadStoresNoPlaintextOrKey runs a real upload flow and asserts the server
+// only ever receives ciphertext: no stored blob or sealed root contains the
+// plaintext marker or the raw vault key (§7/§15/§26 — zero-knowledge, no leak).
+func TestUploadStoresNoPlaintextOrKey(t *testing.T) {
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, err := vault.Unlock(ctx, client, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	marker := []byte("PLAINTEXT-MARKER-SHOULD-NEVER-APPEAR-0123456789")
+	up := NewUploader(client, store, vk)
+	if _, _, err := up.Create(ctx, "secret.txt", "text/plain", "2021-01-01T00:00:00Z", marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.blobs) == 0 {
+		t.Fatal("no blobs stored — flow did not run")
+	}
+	for id, b := range m.blobs {
+		if bytes.Contains(b, marker) {
+			t.Fatalf("blob %s leaked plaintext", id)
+		}
+		if bytes.Contains(b, vk) {
+			t.Fatalf("blob %s leaked the vault key", id)
+		}
+	}
+	if strings.Contains(m.store, base64.StdEncoding.EncodeToString(vk)) {
+		t.Fatal("sealed root leaked the vault key")
+	}
+	if bytes.Contains([]byte(m.store), marker) {
+		t.Fatal("sealed root leaked plaintext")
+	}
 }
