@@ -518,6 +518,10 @@ time from the web profile's device list, or with `auth logout`.
   `auth status` reports which backend is in use.
 - **Zero-knowledge:** the token authenticates API calls only. It does not derive,
   hold, or transmit any vault key.
+- **Shard cache:** to speed up repeated or resumed runs on a large library, the
+  CLI caches encrypted record shards in `cache/` under the config directory
+  (`0600` files in a `0700` dir). It stores **only ciphertext** — the same bytes
+  the server holds, never plaintext — and is cleared by `auth logout`.
 - **Store v3 (post-quantum):** the gallery and files use a content-addressed,
   id-bucketed sealed store with a crypto-suite tag on every manifest. Content at
   rest is symmetric (XChaCha20-Poly1305 + Argon2id → already quantum-resistant);

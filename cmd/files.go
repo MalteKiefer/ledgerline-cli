@@ -81,6 +81,7 @@ func runFilesDownload(cmd *cobra.Command, outDir, path string, force bool) error
 	}
 
 	store := files.NewStore(client, vk)
+	store.SetShardCache(shardCache("files-shards"))
 	fmt.Fprintln(w, "Loading files…")
 	if err := store.Load(ctx); err != nil {
 		return err
@@ -230,6 +231,7 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batc
 	}
 
 	store := files.NewStore(client, vk)
+	store.SetShardCache(shardCache("files-shards"))
 	fmt.Fprintln(w, "Loading files…")
 	if err := store.Load(ctx); err != nil {
 		return err

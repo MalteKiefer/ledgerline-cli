@@ -55,6 +55,7 @@ func runFilesRm(cmd *cobra.Command, path string, recursive, force bool) error {
 	}
 
 	store := files.NewStore(client, vk)
+	store.SetShardCache(shardCache("files-shards"))
 	if err := store.Load(ctx); err != nil {
 		return err
 	}

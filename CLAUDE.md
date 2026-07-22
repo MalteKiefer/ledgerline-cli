@@ -78,6 +78,7 @@ internal/api/           typed /api/v1 HTTP client (per-module + sharded store, b
 internal/crypto/        VK hierarchy, blob frame, manifest seal, hybrid KEM   [reuse seam]
 internal/canonicaljson/ Store v3 canonical JSON — ONLY path to sealed/hashed bytes [seam]
 internal/shard/         content-addressed id-bucketing (§5.1)                  [seam]
+internal/blobcache/     on-disk CIPHERTEXT shard cache (ref-addressed, 0600)
 internal/conformance/   §17 cross-client fixtures + KATs (release gate)
 internal/gallery/        v3 sharded gallery store + upload pipeline            [sharded engine]
 internal/files/          v3 sharded files store (same engine shape) + tree/sync
@@ -149,6 +150,9 @@ RFCs: 8446 (TLS), 9106 (Argon2), 5869 (HKDF), FIPS 203 (ML-KEM), 7748 (X25519),
 - **VK / per-blob keys:** secret. Process memory only; never serialized plaintext.
 - **Bearer token:** secret. OS keyring where available, else 0600 file fallback
   (§11 register). Never logged, never argv/env.
+- **Shard cache:** CIPHERTEXT only (encrypted shard blobs, same bytes the server
+  holds), under `<config>/cache`, 0600 files in a 0700 dir, purged on logout. No
+  plaintext at rest (§7) — decryption stays in memory.
 - **Content:** plaintext local only. Flow: read file → seal locally → upload
   ciphertext. Download: fetch ciphertext → decrypt locally. Default upload sends
   NO plaintext to the server; `--process`/`--ml` explicitly opt into the
@@ -221,9 +225,12 @@ correctness/interop defects — conformance is green):
   targeted and safe; the CLI still does NOT trigger the destructive full-live-set
   `/blobs/reconcile` sweep — that decision is in §13.
 - DONE 2026-07-22: TLS floor raised to 1.3 (`MinVersion: VersionTLS13`).
-- Perf: ETag/304 + a decrypted-shard disk cache not yet used on cold load
-  (`/raw-batch` IS now used for the cold shard fetch). ETag/disk-cache is a
-  larger persistent-cache feature — still open.
+- DONE 2026-07-22: content-addressed CIPHERTEXT shard cache
+  (`internal/blobcache`, wired into gallery+files loads, purged on logout) so
+  repeated/resumed loads skip re-fetching unchanged shards. Still open: ETag/304
+  on the root GET (minor — root is tiny) and a DECRYPTED-plaintext cache (would
+  be opt-in per §7; deliberately not built — the ciphertext cache keeps no
+  plaintext at rest and captures the network win).
 - DONE 2026-07-22: SBOM (CycloneDX, `make sbom` → committed `sbom.json`) diffed
   in CI (`make sbom-verify`); reproducible-build verification in CI
   (`make repro-verify`, BUILD_DATE pinned to the commit date). Still open:
@@ -273,7 +280,10 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` feat(files): parallel `files upload --jobs` (bounded
+- 2026-07-22 `<pending>` feat: content-addressed ciphertext shard cache
+  (`internal/blobcache`), purged on logout; SBOM verify ignores the module's own
+  git pseudo-version.
+- 2026-07-22 `0312239` feat(files): parallel `files upload --jobs` (bounded
   worker pool; slow network step unlocked, tree+ops staging serialized via
   Uploader.stageMu; batch-barrier save). Race-clean.
 - 2026-07-22 `8839273` gallery/files: reclaim freed shard/collection blobs

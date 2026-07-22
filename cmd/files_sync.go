@@ -140,6 +140,7 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	}
 
 	store := files.NewStore(client, vk)
+	store.SetShardCache(shardCache("files-shards"))
 	fmt.Fprintln(w, "Loading files…")
 	if err := store.Load(ctx); err != nil {
 		return err

@@ -279,6 +279,7 @@ func newAuthLogoutCommand() *cobra.Command {
 			if err := session.Clear(); err != nil {
 				return fmt.Errorf("could not clear local credential: %w", err)
 			}
+			purgeShardCaches()
 			fmt.Fprintln(out, "Logged out.")
 			return nil
 		},

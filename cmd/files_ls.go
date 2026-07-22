@@ -58,6 +58,7 @@ func runFilesLs(cmd *cobra.Command, path string, recursive, color, icons bool) e
 	}
 
 	store := files.NewStore(client, vk)
+	store.SetShardCache(shardCache("files-shards"))
 	if err := store.Load(ctx); err != nil {
 		return err
 	}

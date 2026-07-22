@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
+	"github.com/MalteKiefer/ledgerline-cli/internal/blobcache"
 	"github.com/MalteKiefer/ledgerline-cli/internal/canonicaljson"
 	"github.com/MalteKiefer/ledgerline-cli/internal/crypto"
 	"github.com/MalteKiefer/ledgerline-cli/internal/shard"
@@ -75,12 +76,17 @@ type Store struct {
 	foldersDesc *collDesc
 	root        map[string]json.RawMessage // preserve unknown root keys
 	ops         []op
+	cache       *blobcache.Cache // optional ciphertext shard cache (nil = disabled)
 }
 
 // NewStore builds a Files store bound to a client and unlocked vault key.
 func NewStore(client *api.Client, vaultKey []byte) *Store {
 	return &Store{client: client, vk: vaultKey, root: map[string]json.RawMessage{}}
 }
+
+// SetShardCache attaches a ciphertext shard cache so repeated/resumed loads skip
+// re-fetching unchanged shards. Ciphertext only — no plaintext at rest.
+func (s *Store) SetShardCache(c *blobcache.Cache) { s.cache = c }
 
 // Load fetches and decrypts the v3 Files root, its file-record shards and the
 // fileFolders collection blob. v3 only — no v1/v2 read paths.
@@ -145,16 +151,29 @@ func (s *Store) Load(ctx context.Context) error {
 // loadShards downloads, decrypts and concatenates every shard's file records. A
 // failed shard aborts the load rather than silently dropping records.
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
-	batched := s.prefetchShards(ctx, shards)
+	fromCache := make(map[string][]byte)
+	var miss []string
+	for _, sh := range shards {
+		if b, ok := s.cache.Get(sh.Ref); ok {
+			fromCache[sh.Ref] = b
+		} else {
+			miss = append(miss, sh.Ref)
+		}
+	}
+	batched := s.batchFetch(ctx, miss)
+
 	var recs []json.RawMessage
 	for i, sh := range shards {
-		blob, ok := batched[sh.Ref]
-		if !ok {
-			var err error
-			blob, err = s.fetchBlobWithRetry(ctx, sh.Ref)
-			if err != nil {
-				return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
+		blob, cached := fromCache[sh.Ref]
+		if !cached {
+			var ok bool
+			if blob, ok = batched[sh.Ref]; !ok {
+				var err error
+				if blob, err = s.fetchBlobWithRetry(ctx, sh.Ref); err != nil {
+					return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
+				}
 			}
+			s.cache.Put(sh.Ref, blob) // ciphertext only — safe at rest
 		}
 		plain, err := crypto.DecryptContent(blob, sh.Key, s.vk)
 		if err != nil {
@@ -166,7 +185,19 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 		}
 		recs = append(recs, arr...)
 	}
+	s.cache.Prune(shardRefsOf(shards))
 	return recs, nil
+}
+
+// shardRefsOf returns the non-empty refs of a shard set.
+func shardRefsOf(shards []shardDesc) []string {
+	refs := make([]string, 0, len(shards))
+	for _, sh := range shards {
+		if sh.Ref != "" {
+			refs = append(refs, sh.Ref)
+		}
+	}
+	return refs
 }
 
 // loadCollection downloads + decrypts a content-addressed collection blob → array.
@@ -186,18 +217,12 @@ func (s *Store) loadCollection(ctx context.Context, ref, key string) ([]json.Raw
 	return arr, nil
 }
 
-// prefetchShards fetches all file-record shard ciphertexts in one raw-batch
-// round-trip (§10). Best-effort: on error or a single shard it returns nil and
+// batchFetch fetches the given (cache-missed) refs in one raw-batch round-trip
+// (§10). Best-effort: for fewer than two refs, or on error, it returns nil and
 // the caller falls back to a per-blob GET; an omitted ref is simply absent.
-func (s *Store) prefetchShards(ctx context.Context, shards []shardDesc) map[string][]byte {
-	if len(shards) < 2 {
+func (s *Store) batchFetch(ctx context.Context, refs []string) map[string][]byte {
+	if len(refs) < 2 {
 		return nil
-	}
-	refs := make([]string, 0, len(shards))
-	for _, sh := range shards {
-		if sh.Ref != "" {
-			refs = append(refs, sh.Ref)
-		}
 	}
 	batched, err := s.client.GetFilesBlobsBatch(ctx, refs)
 	if err != nil {
