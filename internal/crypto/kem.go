@@ -1,16 +1,13 @@
 package crypto
 
 import (
+	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-
-	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/hkdf"
 )
 
 // Post-quantum hybrid KEM for asymmetric key-wraps (Store v3 §6.3). Used only for
@@ -22,7 +19,9 @@ import (
 // fall (PQXDH-style). Interop is by standard, not byte-identical code, and is
 // validated by the §17 ML-KEM-768 NIST KAT + wrap/unwrap round-trip fixtures.
 //
-// Byte-for-byte aligned with the web client resources/js/shared/pq-kem.js:
+// Standard-library only (no third-party crypto): ML-KEM-768 via crypto/mlkem,
+// X25519 via crypto/ecdh, HKDF-SHA256 via crypto/hkdf. Byte-for-byte aligned with
+// the web client resources/js/shared/pq-kem.js:
 //   info = "ledgerline/kem/v1" + context, empty HKDF salt, ikm = ss_ec ‖ ss_pq.
 
 const (
@@ -30,18 +29,21 @@ const (
 	wrapKeyLen    = 32
 )
 
+// x25519 is the shared X25519 curve handle (crypto/ecdh, RFC 7748).
+func x25519() ecdh.Curve { return ecdh.X25519() }
+
 // Identity is a user's hybrid identity keypair (§6.3). The public halves
 // (X25519Pub, MLKEMEncapKey) are published; the secret halves are sealed under VK.
 type Identity struct {
 	X25519Pub     string // base64 X25519 public key
 	MLKEMEncapKey string // base64 ML-KEM-768 encapsulation key (public, non-secret)
 
-	x25519Secret []byte                     // raw 32-byte X25519 secret key
-	mlkemDecap   *mlkem.DecapsulationKey768 // ML-KEM-768 secret key
+	x25519Priv *ecdh.PrivateKey           // X25519 secret key
+	mlkemDecap *mlkem.DecapsulationKey768 // ML-KEM-768 secret key
 }
 
 // X25519Secret returns the raw X25519 secret key bytes (to be sealed under VK).
-func (id *Identity) X25519Secret() []byte { return id.x25519Secret }
+func (id *Identity) X25519Secret() []byte { return id.x25519Priv.Bytes() }
 
 // MLKEMSeed returns the 64-byte ML-KEM-768 seed (d‖z) that regenerates the secret
 // key (to be sealed under VK). crypto/mlkem stores the compact seed form.
@@ -50,11 +52,7 @@ func (id *Identity) MLKEMSeed() []byte { return id.mlkemDecap.Bytes() }
 // GenerateIdentity creates a fresh hybrid identity: an X25519 keypair plus an
 // ML-KEM-768 keypair (§6.3), matching VaultShareCrypto.newIdentity in the web.
 func GenerateIdentity() (*Identity, error) {
-	sk := make([]byte, curve25519.ScalarSize)
-	if _, err := rand.Read(sk); err != nil {
-		return nil, err
-	}
-	pub, err := curve25519.X25519(sk, curve25519.Basepoint)
+	priv, err := x25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
@@ -63,9 +61,9 @@ func GenerateIdentity() (*Identity, error) {
 		return nil, err
 	}
 	return &Identity{
-		X25519Pub:     b64(pub),
+		X25519Pub:     b64(priv.PublicKey().Bytes()),
 		MLKEMEncapKey: b64(dk.EncapsulationKey().Bytes()),
-		x25519Secret:  sk,
+		x25519Priv:    priv,
 		mlkemDecap:    dk,
 	}, nil
 }
@@ -73,21 +71,18 @@ func GenerateIdentity() (*Identity, error) {
 // NewIdentityFromSecrets rebuilds an Identity from sealed secret material: a raw
 // 32-byte X25519 secret key and the 64-byte ML-KEM-768 seed.
 func NewIdentityFromSecrets(x25519Secret, mlkemSeed []byte) (*Identity, error) {
-	if len(x25519Secret) != curve25519.ScalarSize {
-		return nil, errors.New("crypto: x25519 secret must be 32 bytes")
-	}
-	pub, err := curve25519.X25519(x25519Secret, curve25519.Basepoint)
+	priv, err := x25519().NewPrivateKey(x25519Secret)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("crypto: x25519 secret: %w", err)
 	}
 	dk, err := mlkem.NewDecapsulationKey768(mlkemSeed)
 	if err != nil {
 		return nil, err
 	}
 	return &Identity{
-		X25519Pub:     b64(pub),
+		X25519Pub:     b64(priv.PublicKey().Bytes()),
 		MLKEMEncapKey: b64(dk.EncapsulationKey().Bytes()),
-		x25519Secret:  x25519Secret,
+		x25519Priv:    priv,
 		mlkemDecap:    dk,
 	}, nil
 }
@@ -108,19 +103,17 @@ func deriveWrapKey(ssEc, ssPq []byte, context string) ([]byte, error) {
 	ikm := make([]byte, 0, len(ssEc)+len(ssPq))
 	ikm = append(ikm, ssEc...)
 	ikm = append(ikm, ssPq...)
-	info := []byte(kemInfoPrefix + context)
-	r := hkdf.New(sha256.New, ikm, nil, info)
-	out := make([]byte, wrapKeyLen)
-	if _, err := io.ReadFull(r, out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return hkdf.Key(sha256.New, ikm, nil, kemInfoPrefix+context, wrapKeyLen)
 }
 
 // HybridWrap wraps payload (e.g. a raw vault key) to a recipient's public identity
 // using the post-quantum hybrid KEM (§6.3). It returns the JSON-encoded envelope.
 func HybridWrap(payload []byte, recipientX25519PubB64, recipientMLKEMEkB64, context string) (string, error) {
-	recipPub, err := unb64(recipientX25519PubB64)
+	recipPubBytes, err := unb64(recipientX25519PubB64)
+	if err != nil {
+		return "", fmt.Errorf("crypto: recipient x25519 pub: %w", err)
+	}
+	recipPub, err := x25519().NewPublicKey(recipPubBytes)
 	if err != nil {
 		return "", fmt.Errorf("crypto: recipient x25519 pub: %w", err)
 	}
@@ -137,15 +130,11 @@ func HybridWrap(payload []byte, recipientX25519PubB64, recipientMLKEMEkB64, cont
 	ssPq, kemCt := ek.Encapsulate()
 
 	// Classical leg: ephemeral X25519 DH against the recipient's x25519 pub.
-	ephSk := make([]byte, curve25519.ScalarSize)
-	if _, err := rand.Read(ephSk); err != nil {
-		return "", err
-	}
-	ephPk, err := curve25519.X25519(ephSk, curve25519.Basepoint)
+	eph, err := x25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return "", err
 	}
-	ssEc, err := curve25519.X25519(ephSk, recipPub)
+	ssEc, err := eph.ECDH(recipPub)
 	if err != nil {
 		return "", fmt.Errorf("crypto: x25519 wrap: %w", err)
 	}
@@ -158,7 +147,7 @@ func HybridWrap(payload []byte, recipientX25519PubB64, recipientMLKEMEkB64, cont
 	if err != nil {
 		return "", err
 	}
-	env := KEMEnvelope{Suite: SuiteV3, Epk: b64(ephPk), KemCt: b64(kemCt), C: sealed.C, N: sealed.N}
+	env := KEMEnvelope{Suite: SuiteV3, Epk: b64(eph.PublicKey().Bytes()), KemCt: b64(kemCt), C: sealed.C, N: sealed.N}
 	data, err := json.Marshal(env)
 	if err != nil {
 		return "", err
@@ -185,11 +174,15 @@ func HybridUnwrap(envelopeJSON string, id *Identity, context string) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("crypto: mlkem decapsulate: %w", err)
 	}
-	epk, err := unb64(env.Epk)
+	epkBytes, err := unb64(env.Epk)
 	if err != nil {
 		return nil, err
 	}
-	ssEc, err := curve25519.X25519(id.x25519Secret, epk)
+	epk, err := x25519().NewPublicKey(epkBytes)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: x25519 epk: %w", err)
+	}
+	ssEc, err := id.x25519Priv.ECDH(epk)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: x25519 unwrap: %w", err)
 	}
