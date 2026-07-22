@@ -557,3 +557,35 @@ func TestPartialUploadNoEgress(t *testing.T) {
 		t.Fatalf("partial record lost its basics: %v", raw)
 	}
 }
+
+// TestPickEmbModel covers §8.5 embModel tagging: no embedding → nil; server-
+// produced embedding uses the server's returned model name (authoritative), with
+// a fallback to the configured name on an older server; a local-analyzer
+// embedding uses the configured local model.
+func TestPickEmbModel(t *testing.T) {
+	deref := func(p *string) string {
+		if p == nil {
+			return "<nil>"
+		}
+		return *p
+	}
+	cases := []struct {
+		name      string
+		hasEmb    bool
+		local     bool
+		clip, srv string
+		want      string
+	}{
+		{"no embedding", false, false, "ViT-B-32__openai", "srv-model", "<nil>"},
+		{"server model authoritative", true, false, "ViT-B-32__openai", "srv-model", "srv-model"},
+		{"server fallback to configured", true, false, "ViT-B-32__openai", "", "ViT-B-32__openai"},
+		{"local analyzer uses configured", true, true, "local-clip", "srv-model", "local-clip"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deref(pickEmbModel(tc.hasEmb, tc.local, tc.clip, tc.srv)); got != tc.want {
+				t.Fatalf("pickEmbModel = %q want %q", got, tc.want)
+			}
+		})
+	}
+}

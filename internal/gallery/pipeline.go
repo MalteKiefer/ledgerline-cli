@@ -272,14 +272,9 @@ func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.Pro
 		faces = append(faces, mf)
 	}
 
-	// embModel tags the record + meta with the CLIP model when an embedding is
-	// present (Array.isArray(embedding) ? clipModel : null), so search only ever
-	// compares embeddings within one model space (§8.5).
-	var embModel *string
-	if hasEmbedding(d.Embedding) {
-		m := u.clipModel
-		embModel = &m
-	}
+	// embModel tags the record + meta with the CLIP model that produced the
+	// embedding (§8.5).
+	embModel := pickEmbModel(hasEmbedding(d.Embedding), u.analyzer != nil, u.clipModel, d.Model)
 
 	// Metadata blob (cold; per-photo, immutable, never hashed → floats allowed).
 	exifJSON, _ := json.Marshal(d.Exif)
@@ -358,6 +353,22 @@ func (u *Uploader) encStore(ctx context.Context, plain []byte) (ref, key string,
 		return "", "", err
 	}
 	return ref, encKey, nil
+}
+
+// pickEmbModel chooses the CLIP model name to tag on a record's embModel (§8.5).
+// Returns nil when there is no embedding to tag. When a local analyzer produced
+// the embedding, our configured model name is authoritative; otherwise the server
+// produced it and its returned `model` name wins, falling back to our configured
+// name on an older server that does not return one.
+func pickEmbModel(hasEmb, localAnalyzer bool, clipModel, serverModel string) *string {
+	if !hasEmb {
+		return nil
+	}
+	name := clipModel
+	if !localAnalyzer && serverModel != "" {
+		name = serverModel
+	}
+	return &name
 }
 
 // hasEmbedding reports whether a process result carried a real CLIP embedding
