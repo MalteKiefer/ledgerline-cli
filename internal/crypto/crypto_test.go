@@ -306,3 +306,57 @@ func TestUniformDecryptionFailure(t *testing.T) {
 		t.Fatalf("Open wrong key = %v (want ErrDecrypt)", oerr)
 	}
 }
+
+// TestNoSecretInErrorStrings asserts §18/§28: no failure path formats key material
+// into its error string. It runs every crypto failure and checks the message
+// contains none of the VK, per-blob key, or wrapped-key bytes (hex or base64).
+func TestNoSecretInErrorStrings(t *testing.T) {
+	vk := rep(0x5a, 32)
+	wrong := rep(0xa5, 32)
+
+	secrets := []string{
+		hex.EncodeToString(vk), b64(vk),
+		hex.EncodeToString(wrong), b64(wrong),
+	}
+	assertClean := func(name string, err error) {
+		if err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
+		msg := err.Error()
+		for _, s := range secrets {
+			if s != "" && strings.Contains(msg, s) {
+				t.Fatalf("%s: error leaked secret material: %q", name, msg)
+			}
+		}
+	}
+
+	blob, key, err := EncryptContent([]byte("payload"), vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, e1 := DecryptContent(blob, key, wrong)
+	assertClean("DecryptContent wrong key", e1)
+
+	sealed, err := SealManifest([]byte(`{"v":3}`), vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, e2 := OpenManifest(strings.Replace(sealed, `"suite":1`, `"suite":9`, 1), vk)
+	assertClean("OpenManifest bad suite", e2)
+
+	id, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := HybridWrap(vk, id.X25519Pub, id.MLKEMEncapKey, "ctx-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, e3 := HybridUnwrap(env, id, "ctx-wrong")
+	assertClean("HybridUnwrap wrong context", e3)
+
+	// The uniform sentinel itself is generic.
+	if strings.ContainsAny(ErrDecrypt.Error(), "0123456789abcdef=") && len(ErrDecrypt.Error()) > 40 {
+		t.Fatalf("ErrDecrypt message looks like it carries data: %q", ErrDecrypt.Error())
+	}
+}

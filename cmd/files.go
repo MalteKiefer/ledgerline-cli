@@ -261,15 +261,15 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batc
 
 	// saveBatch persists the store mid-run so an interrupted upload keeps what it
 	// already stored. context.WithoutCancel so a save started at the boundary
-	// finishes cleanly even if the parent context is being cancelled.
+	// finishes cleanly even if the parent context is being cancelled. It draws
+	// into the progress bar's label (overwritten by the next file) rather than
+	// printing a scrolling line every batch.
 	saveBatch := func() error {
 		if !store.Dirty() {
 			return nil
 		}
 		if bar.Active() {
-			bar.Println("  … saving progress")
-		} else {
-			fmt.Fprintln(w, "  … saving progress")
+			bar.Update(curIdx+1, "saving checkpoint…")
 		}
 		return store.Save(context.WithoutCancel(ctx))
 	}

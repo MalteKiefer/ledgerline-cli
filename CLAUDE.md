@@ -190,11 +190,18 @@ correctness/interop defects — conformance is green):
   (`internal/vault/memguard*.go`, wired into `Unlock`); server-param safe-band
   validation already present (`validateKDF`). DONE: uniform decryption-failure
   test (§28) + credential-directory 0700 test.
-- Fuzz tests for parsers (blob frame, manifest, canonical JSON decode, share
-  links) — §11 manual. Not present yet.
+- DONE 2026-07-22: fuzz tests for the hostile-input parsers — canonical JSON
+  decode (`FuzzCanonicalize`, idempotent), blob-frame decode (`FuzzDecryptContent`,
+  bounded/no-panic), sealed-manifest envelope (`FuzzOpenManifest`). 10s active
+  runs clean (millions of execs). Share links: the CLI has no share-link parser
+  (no sharing command) — N/A.
+- DONE 2026-07-22: no-secret-in-output — crypto error strings carry no key
+  material (`TestNoSecretInErrorStrings`); a real upload flow stores only
+  ciphertext (`files.TestUploadStoresNoPlaintextOrKey`).
 - Constant-time failure-DURATION (timing) test — statistical/flaky; deferred. The
   deterministic part (uniform ErrDecrypt, subtle compares) is covered.
-  no-secret-in-output test; memory-ceiling cgroup INTEGRATION test at 18k — open.
+- memory-ceiling cgroup INTEGRATION test at 18k (the guard's parsers are
+  unit-tested; a real-cgroup run is CI infra) — open.
 - Reconcile: the CLI does NOT call `/gallery|files/blobs/reconcile`; rebucket/
   changed-bucket re-seal leaves orphan blobs (safe — no data loss; server GC).
   If reconcile is ever added, the live-set MUST cover every ref class incl. the
