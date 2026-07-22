@@ -1,0 +1,35 @@
+{
+  "note": "seed drives a pure LCG byte generator (see sig test); size = buffer length; expected = fileSig(bytes)",
+  "cases": [
+    {
+      "name": "small buffer (1000 B < 1 MiB): head=whole, tail empty",
+      "size": 1000,
+      "seed": 12345,
+      "expected": "1000:5f934bcecfedde8acfad865e889f3eff0564821d95a3af27db5628835579c0a3"
+    },
+    {
+      "name": "buffer exactly 1 MiB: tail still empty (size not > cap)",
+      "size": 1048576,
+      "seed": 777,
+      "expected": "1048576:f9774f028634e75d06016dd9a385e8dae37952c52eb087b9ba940e24eb73bfd4"
+    },
+    {
+      "name": "large buffer (2 MiB + 4096): disjoint head/tail",
+      "size": 2101248,
+      "seed": 42,
+      "expected": "2101248:47dc3b9d30e8ae8de9701029b7824dfce060f195a35528a95236ecbf8f3d1f20"
+    },
+    {
+      "name": "buffer 1 MiB + 1: head/tail overlap all but 1 byte",
+      "size": 1048577,
+      "seed": 99,
+      "expected": "1048577:9c4e3c4ef2b66cc1f3bfc68f385804d31b92f27dc3305cb52c620f26d02c8baa"
+    },
+    {
+      "name": "empty buffer",
+      "size": 0,
+      "seed": 1,
+      "expected": "0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

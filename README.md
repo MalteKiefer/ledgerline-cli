@@ -233,6 +233,12 @@ machine** before it leaves it — the server only ever sees ciphertext. Uploadin
 requires your vault passphrase (prompted, never echoed), which unlocks the vault
 key locally; the passphrase and key never leave the machine.
 
+By default the upload sends **no plaintext to the server**: each photo is stored
+as a *partial record* (the encrypted original plus its basics, marked
+`thumbPending`), and a GUI client derives thumbnails, EXIF and search data later.
+Pass `--process` (or an ML flag) to opt into the server's transient-plaintext
+derivation step and store fully-processed records now.
+
 Folder mode:
 
 ```sh
@@ -252,7 +258,8 @@ ledgerline-cli gallery upload --google-photos -z /path/to/takeout.zip
 | `--google-photos` | Import from a Google Photos (Takeout) export. |
 | `-z`, `--zip` | Path to the Google Photos export `.zip`. |
 | `-j`, `--jobs` | Upload this many items in parallel (default 4). See [Parallel uploads](#parallel-uploads-and-performance). |
-| `--ml` | Run face detection + search embeddings on the **server** (needs the server's ML service). Without it, the web client analyses photos later. |
+| `--process` | Derive thumbnails/EXIF on the **server** (transient plaintext egress). Off by default — uploads write partial records and no plaintext leaves your machine. Implied by `--ml`/`--ml-local`. |
+| `--ml` | Run face detection + search embeddings on the **server** (needs the server's ML service; implies `--process`). Without it, a GUI client analyses photos later. |
 | `--ml-local` | Run that ML pass on a **local** immich-machine-learning instance at this URL instead of the server. See [Local machine learning](#local-machine-learning---ml-local). Mutually exclusive with `--ml`. |
 | `--ml-clip-model` | CLIP model name for `--ml-local` (default `ViT-B-32__openai`). Must match the server's Smart Search model. |
 | `--ml-face-model` | Face model name for `--ml-local` (default `buffalo_l`). Must match the server's Facial Recognition model. |
@@ -268,9 +275,11 @@ What it handles, matching the web app:
   Apple Live Photo split across two files (paired by its content id), and a
   Google/Samsung Motion Photo with an embedded clip are all stored as one photo
   with its motion clip.
-- **Thumbnails and metadata.** Thumbnail, medium rendition, EXIF, location,
-  perceptual hash (and, with `--ml`, face crops + embeddings) are derived and
-  sealed exactly as the web client stores them.
+- **Thumbnails and metadata.** With `--process` (or an ML flag), thumbnail,
+  medium rendition, EXIF, location, perceptual hash (and, with `--ml`, face crops
+  + embeddings) are derived and sealed exactly as the web client stores them.
+  Without it, these are left `thumbPending` for a GUI client to backfill — no
+  plaintext leaves your machine.
 - **Duplicate skipping.** A byte-identical file already in the gallery is skipped
   (matched by size + a hash of its head and tail).
 - **Resumable & safe.** Progress is saved periodically; `--delete` only removes a
@@ -282,11 +291,12 @@ What it handles, matching the web app:
 
 #### Parallel uploads and performance
 
-Each item is a short pipeline: encrypt + upload the original, ask the server to
-derive thumbnails/EXIF (the transient-plaintext `process` step), then upload the
-derived blobs. Most of the wall-clock time is spent **waiting on the network and
-the server**, not on local CPU, so uploading several items at once is a large
-speed-up for big libraries.
+Each item is a short pipeline: encrypt + upload the original and (with
+`--process`) ask the server to derive thumbnails/EXIF (the transient-plaintext
+`process` step), then upload the derived blobs. Most of the wall-clock time is
+spent **waiting on the network and the server**, not on local CPU, so uploading
+several items at once is a large speed-up for big libraries. (Without
+`--process` there is no server round-trip per item beyond the blob upload.)
 
 `--jobs N` (default 4) uploads N items concurrently. Progress is still saved in
 batches of `--batch` (default 50): the client uploads a batch in parallel, then
@@ -502,6 +512,14 @@ time from the web profile's device list, or with `auth logout`.
   `auth status` reports which backend is in use.
 - **Zero-knowledge:** the token authenticates API calls only. It does not derive,
   hold, or transmit any vault key.
+- **Store v3 (post-quantum):** the gallery and files use a content-addressed,
+  id-bucketed sealed store with a crypto-suite tag on every manifest. Content at
+  rest is symmetric (XChaCha20-Poly1305 + Argon2id → already quantum-resistant);
+  cross-user sharing/identity key-wraps use a post-quantum **hybrid X25519 +
+  ML-KEM-768** exchange (FIPS 203), so a captured share stays confidential unless
+  *both* primitives fall. All sealed bytes are canonical JSON, byte-identical
+  across the web, iOS, Android and CLI clients (gated by shared conformance
+  fixtures). Requires a Store v3 server; there is no v1/v2 compatibility.
 - **No telemetry:** the CLI contacts only your configured server and (for
   `status`) GitHub's public release API. It collects nothing about you.
 
@@ -520,12 +538,15 @@ consistent:
 ```
 cmd/                  command tree (root, status, auth, gallery, files, todo)
 internal/api/         typed HTTP client for the /api/v1 surface
-internal/crypto/      libsodium-compatible crypto (secretbox, Argon2id, secretstream)
+internal/crypto/      libsodium-compatible crypto + PQ hybrid KEM (X25519+ML-KEM-768)
+internal/canonicaljson/ Store v3 canonical JSON (byte-identical across clients)
+internal/shard/       content-addressed, id-bucketed sharding (Store v3 §5.1)
+internal/conformance/ §17 cross-client conformance tests (fixtures + KATs)
 internal/vault/       passphrase → vault key unlock
-internal/manifeststore/ shared opaque-manifest engine (conflict-safe save, DRY)
-internal/files/       Files module: tree, listing, upload, download, two-way sync
-internal/todo/        Todos module: todos and lists over the shared manifest
-internal/gallery/     manifest v2, upload pipeline, Live Photo pairing, sources
+internal/manifeststore/ per-module sealed-row engine (conflict-safe save, DRY)
+internal/files/       Files module: sharded store, tree, listing, upload, download, sync
+internal/todo/        Todos module: todos and lists in the /store/todos row
+internal/gallery/     Store v3 sharded manifest, upload pipeline, Live Photo pairing
 internal/ml/          local immich-machine-learning client (--ml-local)
 internal/session/     durable credential storage (keychain + file fallback)
 internal/settings/    user-editable settings file (ignore list, sync mappings)
@@ -535,15 +556,19 @@ internal/version/     build metadata and update checks
 internal/ui/          prompts and spinner
 ```
 
-The Files and Todos modules both live in one sealed *workspace manifest* shared
-with the web client (notes, bookmarks, contacts, …). `internal/manifeststore` is
-the single engine that decrypts it, stages edits as operations, and re-seals with
-optimistic-concurrency retry — always preserving keys owned by other modules
-verbatim — so each module is a thin, consistent wrapper.
+Under Store v3 each small module has its own sealed row at `/store/{module}`;
+`internal/manifeststore` decrypts one row, stages edits as operations, and
+re-seals with optimistic-concurrency retry — preserving unknown keys verbatim —
+so Todos is a thin wrapper. The Files and Gallery modules are large collections
+and use the sharded profile instead: a tiny sealed root pointing at
+content-addressed, id-bucketed record shards plus sibling collection blobs, so a
+save re-seals only the one bucket that changed.
 
-The gallery crypto reproduces the web vault (`resources/js/vault.js`) byte for
-byte and is verified against libsodium-generated known-answer tests, so photos
-uploaded by the CLI are readable in the web and Android clients and vice versa.
+The crypto reproduces the web vault (`resources/js/vault.js`) and its shared
+helpers byte for byte — canonical JSON, the suite envelope, blob framing, `sig`,
+and the ML-KEM-768 hybrid KEM are all verified against the shared §17 conformance
+fixtures — so anything the CLI writes is readable in the web, iOS and Android
+clients and vice versa.
 
 ## Versioning
 

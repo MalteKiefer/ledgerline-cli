@@ -1,0 +1,66 @@
+[
+  {
+    "name": "sorted keys + compact",
+    "input": {
+      "b": 1,
+      "a": 2,
+      "c": 3
+    },
+    "expected": "{\"a\":2,\"b\":1,\"c\":3}"
+  },
+  {
+    "name": "nested + array order",
+    "input": {
+      "z": [
+        3,
+        1,
+        2
+      ],
+      "a": {
+        "y": 1,
+        "x": 2
+      }
+    },
+    "expected": "{\"a\":{\"x\":2,\"y\":1},\"z\":[3,1,2]}"
+  },
+  {
+    "name": "null/bool/int",
+    "input": {
+      "n": null,
+      "t": true,
+      "f": false,
+      "i": -7
+    },
+    "expected": "{\"f\":false,\"i\":-7,\"n\":null,\"t\":true}"
+  },
+  {
+    "name": "dec-string lat/lng (no float)",
+    "input": {
+      "lat": "52.520008",
+      "lng": "13.404954"
+    },
+    "expected": "{\"lat\":\"52.520008\",\"lng\":\"13.404954\"}"
+  },
+  {
+    "name": "unicode literal + minimal escape",
+    "input": {
+      "key": "a\"b\\cé"
+    },
+    "expected": "{\"key\":\"a\\\"b\\\\cé\"}"
+  },
+  {
+    "name": "no NFC normalization (decomposed survives verbatim)",
+    "input": {
+      "w": "café"
+    },
+    "expected": "{\"w\":\"café\"}"
+  },
+  {
+    "name": "empty object/array",
+    "input": {
+      "o": {},
+      "a": []
+    },
+    "expected": "{\"a\":[],\"o\":{}}"
+  }
+]

@@ -1,0 +1,49 @@
+{
+  "HEADERBYTES": 24,
+  "ABYTES": 17,
+  "CHUNK": 4194304,
+  "suite": 1,
+  "note": "Blob-frame layout (§17 Blob crypto). A sealed content blob = secretstream header (HEADERBYTES) then, per 4-MiB message, [u32le(cipherLen) then cipher] where cipherLen = plaintextChunk + ABYTES. frameSize = ciphertextSize(plaintextLen) = HEADERBYTES + plaintextLen + chunks*(ABYTES+4); a 0-byte blob still emits one final (empty) message. The per-file key + nonce are random so raw frame bytes are NOT pinned - we pin the deterministic frame SIZE and Padme bucket, plus a live encrypt->decrypt round-trip in the test. The sealed-MANIFEST envelope carries suite=1 and is Padme-padded (secretbox), asserted separately.",
+  "frames": [
+    {
+      "plaintextLen": 0,
+      "frameSize": 45,
+      "padmeSize": 0
+    },
+    {
+      "plaintextLen": 1,
+      "frameSize": 46,
+      "padmeSize": 1
+    },
+    {
+      "plaintextLen": 100,
+      "frameSize": 145,
+      "padmeSize": 104
+    },
+    {
+      "plaintextLen": 1000,
+      "frameSize": 1045,
+      "padmeSize": 1024
+    },
+    {
+      "plaintextLen": 4095,
+      "frameSize": 4140,
+      "padmeSize": 4096
+    },
+    {
+      "plaintextLen": 4096,
+      "frameSize": 4141,
+      "padmeSize": 4096
+    },
+    {
+      "plaintextLen": 4097,
+      "frameSize": 4142,
+      "padmeSize": 4352
+    },
+    {
+      "plaintextLen": 100000,
+      "frameSize": 100045,
+      "padmeSize": 100352
+    }
+  ]
+}

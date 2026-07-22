@@ -82,7 +82,8 @@ func newGalleryUploadCommand() *cobra.Command {
 	f.BoolVarP(&opts.recursive, "recursive", "r", false, "include images in subfolders")
 	f.BoolVar(&opts.googlePhoto, "google-photos", false, "import from a Google Photos (Takeout) export")
 	f.StringVarP(&opts.zipPath, "zip", "z", "", "path to the Google Photos export .zip")
-	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings on the server (needs the server ML service)")
+	f.BoolVar(&opts.process, "process", false, "derive thumbnails/EXIF on the server (transient plaintext egress); off = partial records, no plaintext leaves your machine")
+	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings on the server (needs the server ML service; implies --process)")
 	f.StringVar(&opts.mlLocalURL, "ml-local", "", "run ML on a local immich-machine-learning instance at this URL instead of the server")
 	f.StringVar(&opts.mlClipModel, "ml-clip-model", defaultClipModel, "CLIP model name for --ml-local (must match the server's Smart Search model)")
 	f.StringVar(&opts.mlFaceModel, "ml-face-model", defaultFaceModel, "face model name for --ml-local (must match the server's Facial Recognition model)")
@@ -99,6 +100,7 @@ type uploadOptions struct {
 	recursive   bool
 	googlePhoto bool
 	zipPath     string
+	process     bool
 	withML      bool
 	mlLocalURL  string
 	mlClipModel string
@@ -148,7 +150,8 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	if err != nil {
 		return err
 	}
-	uploader := gallery.NewUploader(client, store, vk, opts.withML, analyzer)
+	uploader := gallery.NewUploader(client, store, vk, opts.process, opts.withML, analyzer)
+	uploader.SetClipModel(opts.mlClipModel)
 	jobs := opts.jobs
 	if jobs < 1 {
 		jobs = defaultJobs

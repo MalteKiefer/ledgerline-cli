@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-22
+
+Store v3: a clean-slate, post-quantum sealed-store upgrade shared with the web,
+iOS and Android clients. **Requires a Store v3 server. There is no migration and
+no v1/v2 compatibility** — the CLI reads and writes only the v3 format.
+
 ### Added
+
+- **Post-quantum hybrid key exchange** for cross-user sharing/identity: X25519 +
+  ML-KEM-768 (FIPS 203, Go `crypto/mlkem`) combined via HKDF-SHA256, byte-aligned
+  with the web client and validated against the shared NIST ML-KEM-768 KAT.
+- **Canonical JSON** (`internal/canonicaljson`) — sorted keys, compact,
+  integer-only hot records (lat/lng as fixed 6-dp decimal strings) — so every
+  client seals byte-identical bytes. Gated by the shared §17 conformance fixtures
+  (canonical JSON, shard hashing, blob framing, `sig`, ML-KEM KAT).
+- **Crypto-suite envelope** (`suite:1`) on every sealed manifest; an unknown
+  suite fails closed.
+- `gallery upload --process`: opt in to server-side thumbnail/EXIF derivation.
+
+### Changed
+
+- **Gallery is now a Store v3 content-addressed, id-bucketed sharded store**: any
+  edit touches exactly one shard bucket (no array-position cascade), buckets are
+  stable across clients, and albums/people live in their own collection blobs.
+- **`gallery upload` no longer sends plaintext to the server by default.** It
+  writes a partial record (original + basics, `thumbPending`) with no plaintext
+  egress; a GUI client — or `--process` / `--ml` / `--ml-local` — derives
+  thumbnails, EXIF and ML later. Previously every upload called the server's
+  transient-plaintext `process` step.
+- **Files graduated to its own sharded store** (`/files/store`, root + id-bucketed
+  shards + a folders collection blob), matching the gallery engine.
+- **Store modules moved to per-module sealed rows** (`/store/{module}`): the CLI's
+  todos now live in their own `todos` row instead of one shared manifest.
+
+### Added (earlier, unreleased)
 
 - `gallery download --edited`: bake edited date/GPS into exported files and
   export Live Photo motion (still + matching `.mov`) via exiftool.
@@ -18,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file — so a slow pass (content comparisons download blobs) no longer looks
   frozen.
 
-### Changed
+### Changed (earlier, unreleased)
 
 - `files sync` no longer flags every pre-existing file as a conflict on the
   first run: a local and remote copy holding the same content are left untouched

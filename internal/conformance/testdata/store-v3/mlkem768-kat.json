@@ -1,0 +1,12 @@
+{
+  "_note": "ML-KEM-768 FIPS-203 deterministic KAT (§17). seed=64B 0..63, msgSeed=32B 200-i. Any conformant lib reproduces these given the same seed+msg.",
+  "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "msgSeed": "c8c7c6c5c4c3c2c1c0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0afaeadacabaaa9",
+  "ekSha256": "0b7934c83125c788995e2ba6bd761e33046b3e40571be53e023309a29f398cc9",
+  "dkSha256": "dac268bde6a8dd238e9887117d6b664e7a7a9350ad6b7c08a948e504809572a5",
+  "ctSha256": "754478f91c2bb04f7ed790063d790491f53ae91ec4c0f7fe75a48593002d3ef0",
+  "sharedSecret": "9be827c5722456b406997307ed9f552b0f128bd2e9f7a7b352d4ba08bfb8e0ec",
+  "ekLen": 1184,
+  "dkLen": 2400,
+  "ctLen": 1088
+}

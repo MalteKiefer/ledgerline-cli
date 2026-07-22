@@ -2,7 +2,9 @@ package files
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -59,7 +61,7 @@ func newMock(t *testing.T, pass string) *mock {
 			"kdf_ops": ops, "kdf_mem": mem, "wrapped_vault_key": wrapped.C, "wrap_nonce": wrapped.N,
 		})
 	})
-	mux.HandleFunc("/api/v1/store", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/files/store", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if r.Method == http.MethodGet {
@@ -131,9 +133,61 @@ func (m *mock) client(t *testing.T) *api.Client {
 	return c
 }
 
-// seedManifest seals a raw manifest object into the mock store.
-func (m *mock) seedManifest(t *testing.T, obj any) {
-	raw, err := json.Marshal(obj)
+// sealBlobInto encrypts + pads bytes, stores them under a fresh id, and returns
+// the id + wrapped key (a hand-built blob, so seeded records bypass the canonical
+// write path — this lets a test seed "odd" records like a float size).
+func (m *mock) sealBlobInto(t *testing.T, plain []byte) (ref, key string) {
+	t.Helper()
+	blob, encKey, err := crypto.EncryptContent(plain, m.vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded, err := crypto.PadBlob(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.seq++
+	id := "b" + itoa(m.seq)
+	m.blobs[id] = padded
+	m.mu.Unlock()
+	return id, encKey
+}
+
+// seedFiles seals a v3 Files root into the mock store: all file records go into a
+// single shard (shardBits 0), folders into the fileFolders collection blob, and
+// extraRoot merges any additional root keys (e.g. an unknown field to prove
+// preservation).
+func (m *mock) seedFiles(t *testing.T, files, folders []any, extraRoot map[string]any) {
+	t.Helper()
+	root := map[string]any{"v": 3, "suite": 1, "shardBits": 0, "caps": map[string]any{}}
+
+	filesJSON, err := json.Marshal(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, key := m.sealBlobInto(t, filesJSON)
+	sum := sha256.Sum256(filesJSON)
+	root["shards"] = []map[string]any{{
+		"ref": ref, "key": key, "hash": hex.EncodeToString(sum[:]), "count": len(files), "bucket": 0,
+	}}
+
+	if len(folders) > 0 {
+		foldersJSON, err := json.Marshal(folders)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fref, fkey := m.sealBlobInto(t, foldersJSON)
+		fsum := sha256.Sum256(foldersJSON)
+		root["foldersRef"] = fref
+		root["foldersKey"] = fkey
+		root["foldersHash"] = hex.EncodeToString(fsum[:])
+	}
+	for k, v := range extraRoot {
+		root[k] = v
+	}
+
+	raw, err := json.Marshal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +200,8 @@ func (m *mock) seedManifest(t *testing.T, obj any) {
 	m.mu.Unlock()
 }
 
-// currentManifest decrypts the mock store into a generic map.
-func (m *mock) currentManifest(t *testing.T) map[string]json.RawMessage {
+// currentRoot decrypts the mock store into the root map.
+func (m *mock) currentRoot(t *testing.T) map[string]json.RawMessage {
 	m.mu.Lock()
 	ct := m.store
 	m.mu.Unlock()
@@ -170,14 +224,10 @@ func TestManifestPreservesOtherModules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Seed a manifest that already holds notes + bookmarks.
-	m.seedManifest(t, map[string]any{
-		"v":           1,
-		"notes":       []map[string]any{{"id": "n1", "title": "keep me"}},
-		"bookmarks":   []map[string]any{{"id": "bk1"}},
-		"files":       []any{},
-		"fileFolders": []any{},
-	})
+	// Store v3: Files owns its own sharded store, so foreign modules no longer
+	// share the row. The forward-compat guarantee that remains is unknown-ROOT-key
+	// preservation: a field this client doesn't model must survive a save.
+	m.seedFiles(t, []any{}, []any{}, map[string]any{"futureField": "keep me"})
 
 	store := NewStore(client, vk)
 	if err := store.Load(ctx); err != nil {
@@ -191,22 +241,21 @@ func TestManifestPreservesOtherModules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	man := m.currentManifest(t)
-	if !strings.Contains(string(man["notes"]), "keep me") {
-		t.Fatalf("notes were clobbered: %s", man["notes"])
+	root := m.currentRoot(t)
+	if !strings.Contains(string(root["futureField"]), "keep me") {
+		t.Fatalf("unknown root field was clobbered: %s", root["futureField"])
 	}
-	if !strings.Contains(string(man["bookmarks"]), "bk1") {
-		t.Fatalf("bookmarks were clobbered: %s", man["bookmarks"])
+
+	// The file + its docs folder are readable from a fresh sharded load.
+	fresh := NewStore(client, vk)
+	if err := fresh.Load(ctx); err != nil {
+		t.Fatal(err)
 	}
-	var files []json.RawMessage
-	json.Unmarshal(man["files"], &files)
-	if len(files) != 1 {
-		t.Fatalf("want 1 file, got %d", len(files))
+	if len(fresh.Files()) != 1 {
+		t.Fatalf("want 1 file, got %d", len(fresh.Files()))
 	}
-	var folders []json.RawMessage
-	json.Unmarshal(man["fileFolders"], &folders)
-	if len(folders) != 1 {
-		t.Fatalf("want 1 folder (docs), got %d", len(folders))
+	if len(fresh.Folders()) != 1 {
+		t.Fatalf("want 1 folder (docs), got %d", len(fresh.Folders()))
 	}
 }
 
@@ -216,22 +265,22 @@ func TestChildrenListing(t *testing.T) {
 	ctx := context.Background()
 	vk, _ := vault.Unlock(ctx, client, "pw")
 
-	m.seedManifest(t, map[string]any{
-		"v": 1,
-		"fileFolders": []map[string]any{
-			{"id": "f1", "name": "docs", "parent": nil},
-			{"id": "f2", "name": "sub", "parent": "f1"},
-		},
-		"files": []map[string]any{
-			{"id": "a", "name": "root.txt", "blob": "b1", "encFileKey": "{}", "size": 10, "folder": nil},
-			{"id": "b", "name": "inside.txt", "blob": "b2", "encFileKey": "{}", "size": 20, "folder": "f1"},
+	m.seedFiles(t,
+		[]any{
+			map[string]any{"id": "a", "name": "root.txt", "blob": "b1", "encFileKey": "{}", "size": 10, "folder": nil},
+			map[string]any{"id": "b", "name": "inside.txt", "blob": "b2", "encFileKey": "{}", "size": 20, "folder": "f1"},
 			// A file whose parent folder no longer exists must show at the root.
-			{"id": "c", "name": "orphan.txt", "blob": "b3", "encFileKey": "{}", "size": 30, "folder": "ghost"},
+			map[string]any{"id": "c", "name": "orphan.txt", "blob": "b3", "encFileKey": "{}", "size": 30, "folder": "ghost"},
 			// Odd field types must not drop the record: encFileKey as an object,
 			// size as a float, trashed as a bool.
-			{"id": "d", "name": "weird.pdf", "blob": "b4", "encFileKey": map[string]any{"c": "x", "n": "y"}, "size": 12.0, "trashed": false, "folder": nil},
+			map[string]any{"id": "d", "name": "weird.pdf", "blob": "b4", "encFileKey": map[string]any{"c": "x", "n": "y"}, "size": 12.0, "trashed": false, "folder": nil},
 		},
-	})
+		[]any{
+			map[string]any{"id": "f1", "name": "docs", "parent": nil},
+			map[string]any{"id": "f2", "name": "sub", "parent": "f1"},
+		},
+		nil,
+	)
 
 	store := NewStore(client, vk)
 	if err := store.Load(ctx); err != nil {
@@ -299,19 +348,19 @@ func TestDownloadRefusesTraversalName(t *testing.T) {
 	ctx := context.Background()
 	vk, _ := vault.Unlock(ctx, client, "pw")
 
-	// A hostile manifest names a file so it would escape the sync target.
-	m.seedManifest(t, map[string]any{
-		"v":           1,
-		"fileFolders": []any{},
-		"files": []map[string]any{
-			{"id": "e", "name": "../../evil.txt", "blob": "b1", "encFileKey": "{}", "size": 3, "folder": nil},
+	// A hostile manifest names a file so it would escape the sync target. Its
+	// content blob uses a fixed id that won't collide with the seeded shard blobs.
+	m.seedFiles(t,
+		[]any{
+			map[string]any{"id": "e", "name": "../../evil.txt", "blob": "content1", "encFileKey": "{}", "size": 3, "folder": nil},
 		},
-	})
-	// Put a real (decryptable) blob behind b1 so only the path guard can stop it.
+		[]any{}, nil,
+	)
+	// Put a real (decryptable) blob behind content1 so only the path guard can stop it.
 	blob, key, _ := crypto.EncryptContent([]byte("bad"), vk)
 	padded, _ := crypto.PadBlob(blob)
 	m.mu.Lock()
-	m.blobs["b1"] = padded
+	m.blobs["content1"] = padded
 	m.mu.Unlock()
 	_ = key // the manifest's encFileKey is "{}", so decrypt would fail anyway; the point is the path guard fires first
 
@@ -339,18 +388,18 @@ func TestSubtreeAndForceDelete(t *testing.T) {
 	ctx := context.Background()
 	vk, _ := vault.Unlock(ctx, client, "pw")
 
-	m.seedManifest(t, map[string]any{
-		"v": 1,
-		"fileFolders": []map[string]any{
-			{"id": "f1", "name": "docs", "parent": nil},
-			{"id": "f2", "name": "sub", "parent": "f1"},
+	m.seedFiles(t,
+		[]any{
+			map[string]any{"id": "a", "name": "a.txt", "blob": "content_a", "encFileKey": "{}", "size": 1, "folder": "f1"},
+			map[string]any{"id": "b", "name": "b.txt", "blob": "content_b", "encFileKey": "{}", "size": 1, "folder": "f2"},
+			map[string]any{"id": "r", "name": "root.txt", "blob": "content_r", "encFileKey": "{}", "size": 1, "folder": nil},
 		},
-		"files": []map[string]any{
-			{"id": "a", "name": "a.txt", "blob": "b1", "encFileKey": "{}", "size": 1, "folder": "f1"},
-			{"id": "b", "name": "b.txt", "blob": "b2", "encFileKey": "{}", "size": 1, "folder": "f2"},
-			{"id": "r", "name": "root.txt", "blob": "b3", "encFileKey": "{}", "size": 1, "folder": nil},
+		[]any{
+			map[string]any{"id": "f1", "name": "docs", "parent": nil},
+			map[string]any{"id": "f2", "name": "sub", "parent": "f1"},
 		},
-	})
+		nil,
+	)
 
 	store := NewStore(client, vk)
 	if err := store.Load(ctx); err != nil {

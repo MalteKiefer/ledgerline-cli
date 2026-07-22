@@ -26,7 +26,7 @@ type Store struct {
 // NewStore builds a todo store. New todos are unshifted to the front (matching
 // the web client); lists append.
 func NewStore(client *api.Client, vaultKey []byte) *Store {
-	return &Store{ms: manifeststore.New(client, vaultKey, "todo",
+	return &Store{ms: manifeststore.New(client, vaultKey, "todo", "todos",
 		manifeststore.CollectionSpec{Key: collTodos, PrependAdds: true},
 		manifeststore.CollectionSpec{Key: collLists},
 	)}
