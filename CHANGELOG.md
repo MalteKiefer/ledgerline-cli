@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-22
+
 ### Added
 
 - `files upload --batch N`: save progress every N uploaded/updated files (default
@@ -27,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key derivation and fails closed with a clear error when it cannot hold the
   derivation, instead of risking an OOM kill mid-derivation on a memory-
   constrained host or container.
+- Decryption failures now surface a single uniform error — a truncated blob is
+  indistinguishable from a wrong key or corrupt ciphertext (no failure-cause
+  oracle). Added fuzz tests for the canonical-JSON, blob-frame and sealed-manifest
+  parsers, and tests asserting no key material appears in errors or stored bytes.
 
 ## [0.7.0] - 2026-07-22
 
