@@ -1,6 +1,10 @@
 package vault
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 func TestValidateKDFBounds(t *testing.T) {
 	cases := []struct {
@@ -91,5 +95,35 @@ func TestCheckMemoryFor(t *testing.T) {
 	availableMemory = func() (uint64, bool) { return 0, false }
 	if err := checkMemoryFor(mem); err != nil {
 		t.Fatalf("undeterminable ceiling must not block: %v", err)
+	}
+}
+
+func TestPadFailureFloor(t *testing.T) {
+	// A fresh start must be padded up to at least the floor.
+	start := time.Now()
+	padFailure(context.Background(), start)
+	if el := time.Since(start); el < failFloor {
+		t.Fatalf("padFailure returned after %v, want >= %v", el, failFloor)
+	}
+}
+
+func TestPadFailureAlreadyElapsed(t *testing.T) {
+	// If the floor has already passed, padFailure must not add any delay.
+	start := time.Now().Add(-2 * failFloor)
+	t0 := time.Now()
+	padFailure(context.Background(), start)
+	if el := time.Since(t0); el > 50*time.Millisecond {
+		t.Fatalf("padFailure over-slept %v when floor already elapsed", el)
+	}
+}
+
+func TestPadFailureContextCancel(t *testing.T) {
+	// A cancelled context returns promptly rather than waiting out the floor.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	padFailure(ctx, start)
+	if el := time.Since(start); el >= failFloor {
+		t.Fatalf("padFailure ignored cancellation (%v)", el)
 	}
 }

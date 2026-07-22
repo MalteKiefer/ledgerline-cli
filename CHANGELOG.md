@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Cold shard loads (gallery and files) fetch all record shards in one
+  `raw-batch` round-trip instead of one request per shard, falling back to
+  individual fetches for anything the batch omits.
+
+### Security
+
+- TLS floor raised to **1.3** (was 1.2) for all remote servers; loopback http
+  is still allowed for local development.
+- Wrong-passphrase and wrong-recovery-code failures now take a uniform minimum
+  time (monotonic floor), removing a timing signal and slowing brute-force
+  attempts.
+
 ## [0.7.1] - 2026-07-22
 
 ### Added

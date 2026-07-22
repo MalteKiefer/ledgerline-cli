@@ -3,6 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -106,6 +109,107 @@ func (c *Client) getBlob(ctx context.Context, path string) ([]byte, error) {
 
 // maxBlobBytes caps a single downloaded blob (encrypted, Padmé-padded).
 const maxBlobBytes = 4 << 30 // 4 GiB
+
+// batchMaxIDs is the server's per-request cap on raw-batch ids (openapi maxItems).
+const batchMaxIDs = 512
+
+// maxBatchBytes caps one raw-batch response body. raw-batch is used for the small
+// record shards; the cap bounds a hostile/broken server (§31) while sitting well
+// above a realistic shard batch.
+const maxBatchBytes = 512 << 20 // 512 MiB
+
+// getBlobsBatch fetches many blobs in one round-trip via a module's raw-batch
+// endpoint, returning ref->ciphertext for the blobs that were present (the server
+// silently skips unknown/foreign/missing ids — 404-hiding — so a caller must
+// treat an absent ref as "fetch individually / fail", never as empty). ids are
+// chunked to the server's per-request cap.
+func (c *Client) getBlobsBatch(ctx context.Context, path string, ids []string) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(ids))
+	for start := 0; start < len(ids); start += batchMaxIDs {
+		end := start + batchMaxIDs
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if err := c.getBlobsBatchChunk(ctx, path, ids[start:end], out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) getBlobsBatchChunk(ctx context.Context, path string, ids []string, out map[string][]byte) error {
+	ctx, cancel := context.WithTimeout(ctx, uploadTimeout)
+	defer cancel()
+
+	body, err := json.Marshal(map[string]any{"blobs": ids})
+	if err != nil {
+		return err
+	}
+	resp, err := c.retriableDo(ctx, func() (*http.Request, error) {
+		req, rerr := http.NewRequestWithContext(ctx, "POST", c.endpoint(path), bytes.NewReader(body))
+		if rerr != nil {
+			return nil, rerr
+		}
+		c.applyAuth(req)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/octet-stream")
+		return req, nil
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBatchBytes))
+	if err != nil {
+		return err
+	}
+	return parseBatchStream(data, out)
+}
+
+// parseBatchStream decodes the raw-batch wire format into out, one entry per blob:
+// [u32le idLen][id utf8][u32le dataLen][ciphertext]. Every length is bounded
+// before use so a hostile stream cannot drive an unbounded allocation (§31).
+func parseBatchStream(data []byte, out map[string][]byte) error {
+	const maxIDLen = 1024
+	off := 0
+	for off < len(data) {
+		if off+4 > len(data) {
+			return fmt.Errorf("api: raw-batch truncated id length")
+		}
+		idLen := int(binary.LittleEndian.Uint32(data[off:]))
+		off += 4
+		if idLen <= 0 || idLen > maxIDLen || off+idLen > len(data) {
+			return fmt.Errorf("api: raw-batch bad id length %d", idLen)
+		}
+		id := string(data[off : off+idLen])
+		off += idLen
+
+		if off+4 > len(data) {
+			return fmt.Errorf("api: raw-batch truncated data length")
+		}
+		dataLen := int(binary.LittleEndian.Uint32(data[off:]))
+		off += 4
+		if dataLen < 0 || off+dataLen > len(data) {
+			return fmt.Errorf("api: raw-batch bad data length %d", dataLen)
+		}
+		blob := make([]byte, dataLen)
+		copy(blob, data[off:off+dataLen])
+		out[id] = blob
+		off += dataLen
+	}
+	return nil
+}
+
+// GetGalleryBlobsBatch fetches many gallery blobs in one round-trip.
+func (c *Client) GetGalleryBlobsBatch(ctx context.Context, ids []string) (map[string][]byte, error) {
+	return c.getBlobsBatch(ctx, "/api/v1/gallery/raw-batch", ids)
+}
+
+// GetFilesBlobsBatch fetches many files blobs in one round-trip.
+func (c *Client) GetFilesBlobsBatch(ctx context.Context, ids []string) (map[string][]byte, error) {
+	return c.getBlobsBatch(ctx, "/api/v1/files/raw-batch", ids)
+}
 
 // deleteBlob removes a module blob (idempotent server-side).
 func (c *Client) deleteBlob(ctx context.Context, path string) error {

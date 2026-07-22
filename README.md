@@ -500,7 +500,7 @@ time from the web profile's device list, or with `auth logout`.
 
 ## Security notes
 
-- **Transport:** HTTPS is required for all remote servers, with TLS 1.2 as the
+- **Transport:** HTTPS is required for all remote servers, with **TLS 1.3** as the
   floor. Plain HTTP is accepted only for loopback hosts (`localhost` and the
   `127.0.0.0/8` / `::1` ranges) to ease local development.
 - **Certificate pinning (TOFU):** the first time the CLI connects to an https

@@ -145,11 +145,16 @@ func (s *Store) Load(ctx context.Context) error {
 // loadShards downloads, decrypts and concatenates every shard's file records. A
 // failed shard aborts the load rather than silently dropping records.
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
+	batched := s.prefetchShards(ctx, shards)
 	var recs []json.RawMessage
 	for i, sh := range shards {
-		blob, err := s.fetchBlobWithRetry(ctx, sh.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
+		blob, ok := batched[sh.Ref]
+		if !ok {
+			var err error
+			blob, err = s.fetchBlobWithRetry(ctx, sh.Ref)
+			if err != nil {
+				return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
+			}
 		}
 		plain, err := crypto.DecryptContent(blob, sh.Key, s.vk)
 		if err != nil {
@@ -179,6 +184,26 @@ func (s *Store) loadCollection(ctx context.Context, ref, key string) ([]json.Raw
 		return nil, fmt.Errorf("parse files collection blob: %w", err)
 	}
 	return arr, nil
+}
+
+// prefetchShards fetches all file-record shard ciphertexts in one raw-batch
+// round-trip (§10). Best-effort: on error or a single shard it returns nil and
+// the caller falls back to a per-blob GET; an omitted ref is simply absent.
+func (s *Store) prefetchShards(ctx context.Context, shards []shardDesc) map[string][]byte {
+	if len(shards) < 2 {
+		return nil
+	}
+	refs := make([]string, 0, len(shards))
+	for _, sh := range shards {
+		if sh.Ref != "" {
+			refs = append(refs, sh.Ref)
+		}
+	}
+	batched, err := s.client.GetFilesBlobsBatch(ctx, refs)
+	if err != nil {
+		return nil
+	}
+	return batched
 }
 
 // fetchBlobWithRetry fetches a blob, retrying on transient failures (a fresh
