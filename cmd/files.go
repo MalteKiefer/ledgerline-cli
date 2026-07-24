@@ -86,6 +86,7 @@ func runFilesDownload(cmd *cobra.Command, outDir, path string, force bool) error
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(w, "files", store)
 
 	// A path that names a single file downloads just that file.
 	if fv, ok := files.FindFile(store, path); ok {
@@ -236,6 +237,7 @@ func runFilesUpload(cmd *cobra.Command, folder, remote string, hidden bool, batc
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(w, "files", store)
 
 	remoteBase := strings.Trim(strings.ReplaceAll(remote, "\\", "/"), "/")
 	index := files.IndexByPath(store, remoteBase)

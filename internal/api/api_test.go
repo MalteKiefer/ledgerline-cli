@@ -176,7 +176,7 @@ func TestRetriesTransientStatusesThenSucceeds(t *testing.T) {
 			defer srv.Close()
 
 			c := testClient(t, srv)
-			v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3)
+			v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3, nil)
 			if err != nil {
 				t.Fatalf("save after retries: %v", err)
 			}
@@ -208,7 +208,7 @@ func TestRetriesTransientTransportError(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(t, srv)
-	v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3)
+	v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3, nil)
 	if err != nil {
 		t.Fatalf("save after transport retry: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestGivesUpAfterMaxRetries(t *testing.T) {
 	c := testClient(t, srv)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := c.SaveGalleryStore(ctx, "ciphertext", 3)
+	_, err := c.SaveGalleryStore(ctx, "ciphertext", 3, nil)
 	if Status(err) != http.StatusTooManyRequests && err != context.DeadlineExceeded {
 		t.Fatalf("expected a 429 or deadline after exhausting retries, got %v", err)
 	}

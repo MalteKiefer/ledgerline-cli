@@ -59,6 +59,7 @@ func runFilesRm(cmd *cobra.Command, path string, recursive, force bool) error {
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(w, "files", store)
 
 	// Single file.
 	if fv, ok := files.FindFile(store, path); ok {

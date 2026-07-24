@@ -62,6 +62,7 @@ func runFilesLs(cmd *cobra.Command, path string, recursive, color, icons bool) e
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(w, "files", store)
 
 	if recursive {
 		entries := files.List(store, path)

@@ -145,6 +145,7 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(w, "files", store)
 
 	if !fl.dryRun {
 		// Heartbeat carries only a generic module tag — never a folder name or

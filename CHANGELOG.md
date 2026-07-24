@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Local audit log.** Every operation is recorded to an append-only JSON-lines
+  file (`audit.log` in the config directory, `0600`, size-rotated): one line per
+  operation with its command, outcome, duration and timestamp. It holds operation
+  metadata only — never keys, tokens, passphrases, or content — and is local-only
+  (never sent anywhere). New `audit` command: `audit show [-n N] [--raw]`,
+  `audit path`, `audit purge --yes`. Successful logins/logouts and a degraded
+  (missing-shard) store are recorded as explicit events.
+
+### Fixed
+
+- **Sharded-store data-loss safety** (aligned to the web client): the CLI no
+  longer eagerly deletes a superseded record-shard or collection blob on save — a
+  concurrent writer could reuse that ref, and deleting it would dangle the other
+  writer's root and corrupt the index. Orphans are reclaimed by the server's
+  grace-gated reconcile instead.
+- Every sharded-store save now sends the live blob refs as a referential-
+  integrity guard; the server refuses (422 `missing_shard`) a root that would
+  dangle at a shard whose upload never durably landed.
+- A permanently-missing record shard (HTTP 404) is now tolerated: the gallery or
+  files store loads the surviving records in a read-only *degraded* state and
+  refuses to save, rather than failing the whole load or re-sealing a partial set
+  (which would lose the missing shard's records for good).
+
 ## [0.7.3] - 2026-07-22
 
 ### Added
@@ -30,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gallery and files re-seals now reclaim the shard (and replaced folder-
   collection) blobs the new manifest no longer references, so repeated edits no
   longer accumulate orphaned blobs server-side. Deletion happens only after the
-  new manifest is safely stored.
+  new manifest is safely stored. **(Reverted in Unreleased — this eager deletion
+  is a data-loss race with concurrent writers; see the Fixed entry above.)**
 
 ### Security
 

@@ -43,16 +43,22 @@ func (c *Client) FilesStore(ctx context.Context) (SealedStore, error) {
 	return out, nil
 }
 
-// SaveFilesStore writes the sealed Files root at the expected version. On a 409
-// it returns ErrVersionConflict; the new server version is returned on success.
-func (c *Client) SaveFilesStore(ctx context.Context, ciphertext string, version int64) (int64, error) {
-	body := map[string]any{"ciphertext": ciphertext, "version": version}
+// SaveFilesStore writes the sealed Files root at the expected version. shards is
+// the live blob refs the new root points at (record shards + the folders
+// collection blob); the server rejects the write (422 missing_shard) if any ref
+// has no stored blob. On a 409 it returns ErrVersionConflict; on a missing_shard
+// 422, ErrMissingShard. The new server version is returned on success.
+func (c *Client) SaveFilesStore(ctx context.Context, ciphertext string, version int64, shards []string) (int64, error) {
+	body := map[string]any{"ciphertext": ciphertext, "version": version, "shards": shards}
 	var out struct {
 		Version int64 `json:"version"`
 	}
 	if err := c.request(ctx, "PUT", "/api/v1/files/store", body, &out); err != nil {
 		if Status(err) == http.StatusConflict {
 			return 0, ErrVersionConflict
+		}
+		if isMissingShard(err) {
+			return 0, ErrMissingShard
 		}
 		return 0, err
 	}

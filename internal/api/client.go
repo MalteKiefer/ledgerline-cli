@@ -177,6 +177,7 @@ func isLoopback(host string) bool {
 type APIError struct {
 	StatusCode int
 	Message    string
+	Code       string // top-level {"error": "..."} code (e.g. version_conflict, missing_shard)
 	Fields     map[string][]string
 	RetryAfter time.Duration
 }
@@ -385,10 +386,12 @@ func decodeError(resp *http.Response) error {
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var envelope struct {
 		Message string              `json:"message"`
+		Error   string              `json:"error"`
 		Errors  map[string][]string `json:"errors"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil {
 		apiErr.Message = envelope.Message
+		apiErr.Code = envelope.Error
 		apiErr.Fields = envelope.Errors
 	}
 	return apiErr

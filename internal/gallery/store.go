@@ -51,7 +51,19 @@ type Store struct {
 	root       map[string]json.RawMessage // full root, so unknown/collection keys survive
 	sigs       map[string]bool
 	cache      *blobcache.Cache // optional ciphertext shard cache (nil = disabled)
+
+	// degraded is set when a load skipped a permanently-missing (404) record
+	// shard. In this state the store is READ-ONLY: Save refuses to re-seal, so a
+	// partial record set is never persisted (which would free the missing shard
+	// and lose its records for good). missingShards counts the skipped shards.
+	degraded      bool
+	missingShards int
 }
+
+// Degraded reports whether the last load skipped a permanently-missing shard;
+// the store is then read-only. MissingShards is how many were skipped.
+func (s *Store) Degraded() bool     { return s.degraded }
+func (s *Store) MissingShards() int { return s.missingShards }
 
 // SetShardCache attaches a ciphertext shard cache so repeated/resumed loads skip
 // re-fetching unchanged shards. Ciphertext only — no plaintext at rest.
@@ -76,6 +88,8 @@ func (s *Store) Load(ctx context.Context) error {
 	s.shards = nil
 	s.shardBits = 0
 	s.root = map[string]json.RawMessage{}
+	s.degraded = false
+	s.missingShards = 0
 
 	if sealed.Ciphertext == "" {
 		return nil
@@ -117,9 +131,15 @@ func (s *Store) Load(ctx context.Context) error {
 	return nil
 }
 
-// loadShards downloads, decrypts and concatenates every shard's records. A failed
-// shard aborts the load rather than silently dropping photos (a partial set could
-// be saved and would free the "missing" shard, losing data for good).
+// loadShards downloads, decrypts and concatenates every shard's records.
+//
+// A PERMANENTLY missing shard (404 after retries — e.g. a partial save wrote the
+// root but the shard upload never durably landed) is tolerated: it is skipped,
+// the store enters a degraded READ-ONLY state (Save is frozen so a partial set is
+// never re-sealed — which would free the missing shard and lose its records for
+// good), and the load succeeds with the surviving records. ANY other failure
+// (429 / network / decrypt — possibly transient) still aborts the load, for the
+// same reason: saving a partial set would be destructive.
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
 	// Ciphertext cache first (immutable by ref); batch-fetch only the misses.
 	fromCache := make(map[string][]byte)
@@ -141,6 +161,12 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 			if blob, ok = batched[sh.Ref]; !ok {
 				var err error
 				if blob, err = s.fetchShardWithRetry(ctx, sh.Ref); err != nil {
+					if api.Status(err) == 404 {
+						// Permanently gone: degrade read-only, keep the rest.
+						s.degraded = true
+						s.missingShards++
+						continue
+					}
 					return nil, fmt.Errorf("fetch shard %d/%d (%s): %w", i+1, len(shards), sh.Ref, err)
 				}
 			}
@@ -298,12 +324,20 @@ func (s *Store) MergeLivePhotos() int {
 	return merged
 }
 
+// ErrDegraded is returned by Save when the store loaded in a degraded (read-only)
+// state because a record shard is permanently missing. Re-sealing would drop the
+// missing shard's records for good, so writes are refused.
+var ErrDegraded = errors.New("gallery: store is degraded (a record shard is missing) — refusing to save so no data is lost; restore the missing shard or contact support")
+
 // Save writes the manifest back, re-sealing only the buckets whose canonical
 // content changed plus the tiny root. On a version conflict it reloads the base
 // photos, re-applies this session's additions and retries.
 func (s *Store) Save(ctx context.Context) error {
 	if len(s.added) == 0 {
 		return nil
+	}
+	if s.degraded {
+		return ErrDegraded
 	}
 	for attempt := 0; attempt < maxSaveRetries; attempt++ {
 		if err := s.saveOnce(ctx); err != nil {
@@ -409,47 +443,54 @@ func (s *Store) saveOnce(ctx context.Context) error {
 		descriptors = append(descriptors, shardDesc{Ref: ref, Key: encKey, Hash: hash, Count: len(recs), Bucket: b})
 	}
 
-	root, err := s.buildRoot(shardBits, descriptors)
+	rootMap, err := s.buildRoot(shardBits, descriptors)
 	if err != nil {
 		return err
 	}
-	sealed, err := crypto.SealManifest(root, s.vk)
+	sealed, err := crypto.SealManifest(rootMap, s.vk)
 	if err != nil {
 		return err
 	}
-	newVersion, err := s.client.SaveGalleryStore(ctx, sealed, s.version)
+	// The referential-integrity guard: every live blob ref the new root points at
+	// (record shards + the albums/people collection blobs). A superseded shard is
+	// deliberately NOT deleted here — with a concurrent writer (a second client),
+	// eagerly freeing a ref the winning writer reuses would dangle its root and
+	// lose data. Orphans are reclaimed by the server's grace-gated reconcile.
+	live := shardRefs(descriptors)
+	live = append(live, s.collectionRefs()...)
+	newVersion, err := s.client.SaveGalleryStore(ctx, sealed, s.version, live)
 	if err != nil {
 		return err
 	}
-	// The new root is now authoritative; shard blobs it no longer references are
-	// safe to reclaim. Best-effort AFTER the successful PUT — an interrupted or
-	// failed delete just leaves a harmless orphan, never data loss.
-	freed := freedShardRefs(s.shards, descriptors)
 	s.version = newVersion
 	s.shards = descriptors
 	s.shardBits = shardBits
-	for _, ref := range freed {
-		_ = s.client.DeleteGalleryBlob(ctx, ref)
-	}
 	return nil
 }
 
-// freedShardRefs returns the refs present in old but absent from the new
-// descriptors — shard blobs the re-sealed root no longer references.
-func freedShardRefs(old, next []shardDesc) []string {
-	live := make(map[string]bool, len(next))
-	for _, d := range next {
-		if d.Ref != "" {
-			live[d.Ref] = true
+// collectionRefs returns the current albums/people collection-blob refs from the
+// preserved root (this client does not edit them, only carries them forward).
+func (s *Store) collectionRefs() []string {
+	var refs []string
+	for _, key := range []string{"albumsRef", "peopleRef"} {
+		if ref := rootString(s.root, key); ref != "" {
+			refs = append(refs, ref)
 		}
 	}
-	var freed []string
-	for _, d := range old {
-		if d.Ref != "" && !live[d.Ref] {
-			freed = append(freed, d.Ref)
-		}
+	return refs
+}
+
+// rootString reads a string-valued key from a raw root map (empty when absent).
+func rootString(root map[string]json.RawMessage, key string) string {
+	b, ok := root[key]
+	if !ok {
+		return ""
 	}
-	return freed
+	var v string
+	if err := json.Unmarshal(b, &v); err != nil {
+		return ""
+	}
+	return v
 }
 
 // buildRoot assembles the sealed v3 root: it sets v/suite/shardBits/shards and
