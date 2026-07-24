@@ -127,8 +127,9 @@ called. Toolchain: go 1.25.0 directive, toolchain pinned go1.26.5 (GO-2026-5856)
 - **Key hierarchy:** passphrase → Argon2id → KEK → unwrap VK (32 B, process-only,
   never on disk in plaintext). Argon2id params from the server (`ops`,`mem`) via
   `crypto.DeriveKEK`; contract floor is ops=4/mem=256 MiB (shared with
-  memory-constrained mobile — do NOT raise above the floor). **Host/cgroup memory
-  check before derivation is NOT yet implemented — §12 open item.**
+  memory-constrained mobile — do NOT raise above the floor). Host/cgroup memory
+  guard runs BEFORE derivation (`vault.checkMemoryFor`, fail-closed against an OOM
+  kill on a constrained host); server params safe-band-validated (`validateKDF`).
 - **Blobs:** fresh 32-B per-blob key (crypto/rand); XChaCha20-Poly1305
   secretstream, 4 MiB chunks, frame `[header(24)]([u32le len][cipher len+17])*`
   final tag last, then Padmé. Per-blob key secretbox-wrapped under VK → `{c,n}`.
@@ -195,10 +196,11 @@ RFCs: 8446 (TLS), 9106 (Argon2), 5869 (HKDF), FIPS 203 (ML-KEM), 7748 (X25519),
 
 ## 10. Performance budgets & measured results
 
-- Blob crypto is chunked (4 MiB) and streamed; sharded reads windowed. Memory
-  target O(worker pool × 4 MiB) at 18k/100k. **Not yet formally benchmarked under
-  a constrained cgroup — §12 open item.** Gallery upload worker pool is bounded
-  by `--jobs` (default 4). No crypto/network at init.
+- Blob crypto is chunked (4 MiB) and streamed; sharded reads windowed; cold loads
+  batch-fetched (`/raw-batch`) with a ciphertext shard cache. Memory target
+  O(worker pool × 4 MiB) at 18k/100k. Gallery AND files upload worker pools bound
+  by `--jobs` (default 4). No crypto/network at init. A formal constrained-cgroup
+  benchmark is a CI-infra item (§12).
 
 ## 11. Security register  [LIVING]
 
@@ -212,57 +214,36 @@ No entry is past review. An expired entry blocks new work.
 
 ## 12. Open items  [LIVING]
 
-Gaps against the operating manual's Definition of Done (honestly logged; none are
-correctness/interop defects — conformance is green):
-- DONE 2026-07-22: Argon2 host/cgroup memory guard before derivation
-  (`internal/vault/memguard*.go`, wired into `Unlock`); server-param safe-band
-  validation already present (`validateKDF`). DONE: uniform decryption-failure
-  test (§28) + credential-directory 0700 test.
-- DONE 2026-07-22: fuzz tests for the hostile-input parsers — canonical JSON
-  decode (`FuzzCanonicalize`, idempotent), blob-frame decode (`FuzzDecryptContent`,
-  bounded/no-panic), sealed-manifest envelope (`FuzzOpenManifest`). 10s active
-  runs clean (millions of execs). Share links: the CLI has no share-link parser
-  (no sharing command) — N/A.
-- DONE 2026-07-22: no-secret-in-output — crypto error strings carry no key
-  material (`TestNoSecretInErrorStrings`); a real upload flow stores only
-  ciphertext (`files.TestUploadStoresNoPlaintextOrKey`).
-- DONE 2026-07-22: constant-time failure FLOOR — `vault.padFailure` pads a
-  wrong-passphrase / wrong-recovery failure to a 750 ms monotonic floor
-  (uniform-duration + brute-force speed bump, §23/§28); tested (floor applied,
-  no over-sleep when already elapsed, prompt on context cancel). A full
-  statistical timing-distribution test is still deferred (flaky).
-- memory-ceiling cgroup INTEGRATION test at 18k (the guard's parsers are
-  unit-tested; a real-cgroup run is CI infra) — open.
-- REVERTED 2026-07-24: the eager freed-blob reclaim (added 2026-07-22) is GONE.
-  Web found it is a data-loss RACE (commit `a6e21ec3`): with a concurrent writer,
-  freeing a ref the winning writer reuses on a 409 re-seal dangles that root →
-  404 → corrupt index. The CLI no longer deletes any superseded shard/collection
-  blob on save; orphans are reclaimed by the server's grace-gated reconcile. The
-  CLI still does NOT trigger the full-live-set `/blobs/reconcile` sweep (§13).
-- DONE 2026-07-24: store-PUT referential-integrity guard — every sharded flush
-  (gallery+files) sends `shards[]` (live record-shard + collection-blob refs);
-  the server rejects (422 `missing_shard`) a root that dangles at a shard with no
-  ledger row → surfaced as `api.ErrMissingShard`. Aligned to web `34e4ce4f`.
-- DONE 2026-07-24: 404-tolerant degraded load — a permanently-missing record
-  shard is skipped (store goes read-only, `Degraded()`), so surviving records
-  load and Save is refused (`ErrDegraded`) rather than re-sealing a partial set
-  and losing the missing shard for good. Any non-404 error still aborts the load.
-  Aligned to web `a6e21ec3`/`4fff782b`.
-- DONE 2026-07-22: TLS floor raised to 1.3 (`MinVersion: VersionTLS13`).
-- DONE 2026-07-22: content-addressed CIPHERTEXT shard cache
-  (`internal/blobcache`, wired into gallery+files loads, purged on logout) so
-  repeated/resumed loads skip re-fetching unchanged shards. Still open: ETag/304
-  on the root GET (minor — root is tiny) and a DECRYPTED-plaintext cache (would
-  be opt-in per §7; deliberately not built — the ciphertext cache keeps no
-  plaintext at rest and captures the network win).
-- DONE 2026-07-22: SBOM (CycloneDX, `make sbom` → committed `sbom.json`) diffed
-  in CI (`make sbom-verify`); reproducible-build verification in CI
-  (`make repro-verify`, BUILD_DATE pinned to the commit date). Still open:
-  signed-commits/tags enforcement + two-person-review gate (org/branch-protection
-  policy, not enforceable from the repo tree).
-- On-device derivation (JPEG/PNG thumb, local exiftool EXIF) not implemented;
-  the CLI floor writes partial records for GUI backfill (spec-optional §8.1).
-- TLS MinVersion raise to 1.3 where deployments allow (§11 register item).
+None are correctness/interop defects — conformance is green and the shared
+contract is fully met. What remains is CI-infra, org-policy, or a deliberate
+capability-floor scope decision:
+
+- **CI-infra (not finishable from the repo tree):** a memory-ceiling INTEGRATION
+  test under a real constrained cgroup at 18k. The guard's parsers +
+  `checkMemoryFor` logic are unit-tested (`internal/vault`); a live-cgroup run
+  needs a Linux container CI job.
+- **Org/branch-protection policy (not in the repo tree):** signed-commits/tags
+  enforcement + a two-person-review gate on the crypto/store/CI paths (§2/§20).
+  SBOM diff + reproducible-build verify ARE in CI (`make sbom-verify`,
+  `make repro-verify`).
+- **Deliberately NOT built (documented decisions, not gaps):**
+  - Full-live-set `/blobs/reconcile` — data-loss-critical; escalate before adding
+    (§13). The CLI reclaims nothing eagerly; the server's grace-gated reconcile
+    handles orphans.
+  - On-device derivation (local JPEG/PNG thumb, exiftool EXIF) — the CLI floor
+    writes partial records for GUI backfill (spec-optional §8.1).
+  - ETag/304 on the tiny root GET, and a DECRYPTED-plaintext cache — the latter
+    would keep plaintext at rest (§7); the ciphertext shard cache already captures
+    the network win with no plaintext at rest. Marginal; not built.
+  - Statistical timing-distribution test for the failure floor — flaky; the
+    deterministic floor + uniform-error behaviour is tested (§28).
+
+Everything else the operating manual's Definition of Done calls for is DONE and
+recorded in the Changelog (§15) — Argon2 host-guard, uniform decryption failure,
+fuzz parsers, no-secret-in-output, constant-time failure floor, TLS 1.3, ciphertext
+shard cache, SBOM + reproducible build, parallel uploads, sharded-store data-loss
+safety (revert eager delete + `shards[]` guard + degraded read-only), and the local
+JSON audit trail.
 
 ## 13. Conflicts & decisions  [LIVING]
 
@@ -304,10 +285,10 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-24 `<pending>` feat(audit): local JSONL operation audit trail
+- 2026-07-24 `e709de6` feat(audit): local JSONL operation audit trail
   (`internal/audit`, uniform command hook + domain events; 0600, rotated, no
   secrets); `audit show|path|purge`.
-- 2026-07-24 `<pending>` fix(sharded-store): align to web safety fixes — remove
+- 2026-07-24 `d974d0e` fix(sharded-store): align to web safety fixes — remove
   eager freed-blob delete (data-loss race), `shards[]` PUT integrity guard (422
   missing_shard), 404-tolerant degraded read-only load. Gallery+files.
 - 2026-07-22 `f1e27e1` feat: content-addressed ciphertext shard cache
