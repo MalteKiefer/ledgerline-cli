@@ -4,7 +4,7 @@
   "specVersion": "1.6",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-22T08:22:40+02:00",
+    "timestamp": "2026-07-24T10:37:46+02:00",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -45,11 +45,11 @@
       }
     ],
     "component": {
-      "bom-ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.3-0.20260722054232-88f974106901?type=module",
+      "bom-ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.4-0.20260722062715-f1e27e127b7f?type=module",
       "type": "application",
       "name": "github.com/MalteKiefer/ledgerline-cli",
-      "version": "v0.7.3-0.20260722054232-88f974106901",
-      "purl": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.3-0.20260722054232-88f974106901?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "version": "v0.7.4-0.20260722062715-f1e27e127b7f",
+      "purl": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.4-0.20260722062715-f1e27e127b7f?goarch=arm64\u0026goos=darwin\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/MalteKiefer/ledgerline-cli",
@@ -314,7 +314,7 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.3-0.20260722054232-88f974106901?type=module",
+      "ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.4-0.20260722062715-f1e27e127b7f?type=module",
       "dependsOn": [
         "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
         "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",

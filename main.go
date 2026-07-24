@@ -16,8 +16,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	root := cmd.NewRootCommand()
-	if err := root.ExecuteContext(ctx); err != nil {
+	if err := cmd.Execute(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}

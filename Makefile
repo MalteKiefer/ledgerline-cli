@@ -77,9 +77,11 @@ sbom-verify:
 	@go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
 		mod -json -noserial -licenses -output sbom.new.json .
 	@# Ignore the metadata timestamp and the main module's own git pseudo-version
-	@# (both move on every commit); the point is to catch DEPENDENCY drift.
-	@grep -Ev '("timestamp"|ledgerline-cli@)' sbom.json     > sbom.a.tmp
-	@grep -Ev '("timestamp"|ledgerline-cli@)' sbom.new.json > sbom.b.tmp
+	@# (both move on every commit); the point is to catch DEPENDENCY drift. The
+	@# pinned deps are all tagged releases, so any 0.0.0-<date>-<hash> pseudo-version
+	@# line is the main module and is filtered out.
+	@grep -Ev '("timestamp"|ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' sbom.json     > sbom.a.tmp
+	@grep -Ev '("timestamp"|ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' sbom.new.json > sbom.b.tmp
 	@if ! diff -u sbom.a.tmp sbom.b.tmp; then \
 		rm -f sbom.new.json sbom.a.tmp sbom.b.tmp; \
 		echo "SBOM drift: regenerate with 'make sbom' and commit the change"; exit 1; \

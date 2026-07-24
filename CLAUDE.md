@@ -85,6 +85,7 @@ internal/crypto/        VK hierarchy, blob frame, manifest seal, hybrid KEM   [r
 internal/canonicaljson/ Store v3 canonical JSON — ONLY path to sealed/hashed bytes [seam]
 internal/shard/         content-addressed id-bucketing (§5.1)                  [seam]
 internal/blobcache/     on-disk CIPHERTEXT shard cache (ref-addressed, 0600)
+internal/audit/         local JSONL operation audit trail (0600, rotated, no secrets)
 internal/conformance/   §17 cross-client fixtures + KATs (release gate)
 internal/gallery/        v3 sharded gallery store + upload pipeline            [sharded engine]
 internal/files/          v3 sharded files store (same engine shape) + tree/sync
@@ -159,6 +160,14 @@ RFCs: 8446 (TLS), 9106 (Argon2), 5869 (HKDF), FIPS 203 (ML-KEM), 7748 (X25519),
 - **Shard cache:** CIPHERTEXT only (encrypted shard blobs, same bytes the server
   holds), under `<config>/cache`, 0600 files in a 0700 dir, purged on logout. No
   plaintext at rest (§7) — decryption stays in memory.
+- **Audit trail:** LOCAL-only JSONL at `<config>/audit.log` (0600, size-rotated to
+  one `.1` backup). One line per operation: `{ts,event,outcome,target,count,
+  duration_ms,detail,error,pid}` — operation METADATA only. NEVER a key/VK/token/
+  passphrase or decrypted content (§18/§29); the `audit.Event` struct has no field
+  that could carry one, and command errors are logged as a generic "command
+  failed" (details go to stderr, not the trail). Never shipped (§7). Managed with
+  `audit show|path|purge`. Uniform command-level entry via `cmd.Execute`
+  (ExecuteC) + explicit domain events (auth.login/logout, gallery/files.degraded).
 - **Content:** plaintext local only. Flow: read file → seal locally → upload
   ciphertext. Download: fetch ciphertext → decrypt locally. Default upload sends
   NO plaintext to the server; `--process`/`--ml` explicitly opt into the
@@ -295,6 +304,9 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
+- 2026-07-24 `<pending>` feat(audit): local JSONL operation audit trail
+  (`internal/audit`, uniform command hook + domain events; 0600, rotated, no
+  secrets); `audit show|path|purge`.
 - 2026-07-24 `<pending>` fix(sharded-store): align to web safety fixes — remove
   eager freed-blob delete (data-loss race), `shards[]` PUT integrity guard (422
   missing_shard), 404-tolerant degraded read-only load. Gallery+files.

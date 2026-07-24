@@ -522,6 +522,12 @@ time from the web profile's device list, or with `auth logout`.
   CLI caches encrypted record shards in `cache/` under the config directory
   (`0600` files in a `0700` dir). It stores **only ciphertext** — the same bytes
   the server holds, never plaintext — and is cleared by `auth logout`.
+- **Audit log:** every operation is recorded to a local, append-only JSON-lines
+  log (`audit.log` in the config directory, `0600`). Each line is one operation
+  with its command, outcome, duration and a timestamp — **metadata only, never
+  keys, tokens, passphrases, or content**. It is local; nothing is ever sent
+  anywhere. View it with `ledgerline-cli audit show` (or `--raw` for the JSON),
+  print its path with `audit path`, and delete it with `audit purge --yes`.
 - **Store v3 (post-quantum):** the gallery and files use a content-addressed,
   id-bucketed sealed store with a crypto-suite tag on every manifest. Content at
   rest is symmetric (XChaCha20-Poly1305 + Argon2id → already quantum-resistant);

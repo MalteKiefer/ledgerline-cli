@@ -146,6 +146,7 @@ func runUpload(cmd *cobra.Command, opts uploadOptions) error {
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(out, "gallery", store)
 
 	analyzer, err := buildAnalyzer(opts)
 	if err != nil {

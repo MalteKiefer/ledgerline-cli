@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
+	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
@@ -217,6 +218,13 @@ func runLogin(cmd *cobra.Command, serverFlag, codeFlag, deviceFlag string) error
 		return fmt.Errorf("could not store credential: %w", err)
 	}
 
+	// Audit the successful pairing (server host + identity id — non-secret; the
+	// token itself is never logged, §18).
+	auditLog().Log(audit.Event{
+		Event: "auth.login", Outcome: audit.OutcomeOK,
+		Target: authed.BaseURL(), Detail: fmt.Sprintf("user #%d via %s", user.ID, backendLabel(saved.Backend)),
+	})
+
 	fmt.Fprintf(out, "Logged in as %s <%s> on %s.\n", user.Name, user.Email, authed.BaseURL())
 	fmt.Fprintf(out, "Token stored in the %s.\n", backendLabel(saved.Backend))
 	return nil
@@ -280,6 +288,7 @@ func newAuthLogoutCommand() *cobra.Command {
 				return fmt.Errorf("could not clear local credential: %w", err)
 			}
 			purgeShardCaches()
+			auditLog().Log(audit.Event{Event: "auth.logout", Outcome: audit.OutcomeOK})
 			fmt.Fprintln(out, "Logged out.")
 			return nil
 		},

@@ -58,6 +58,7 @@ func runFilesOpen(cmd *cobra.Command, path string, wait bool) error {
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(w, "files", store)
 	fv, ok := files.FindFile(store, path)
 	if !ok {
 		return fmt.Errorf("no such file: %s", path)

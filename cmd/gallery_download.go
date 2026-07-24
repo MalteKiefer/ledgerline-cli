@@ -98,6 +98,7 @@ func runDownload(cmd *cobra.Command, opts downloadOptions) error {
 	if err := store.Load(ctx); err != nil {
 		return err
 	}
+	warnIfDegraded(out, "gallery", store)
 
 	targets := gallery.Plan(store.Records(), opts.outDir, filter)
 	if len(targets) == 0 {

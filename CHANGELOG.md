@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Local audit log.** Every operation is recorded to an append-only JSON-lines
+  file (`audit.log` in the config directory, `0600`, size-rotated): one line per
+  operation with its command, outcome, duration and timestamp. It holds operation
+  metadata only — never keys, tokens, passphrases, or content — and is local-only
+  (never sent anywhere). New `audit` command: `audit show [-n N] [--raw]`,
+  `audit path`, `audit purge --yes`. Successful logins/logouts and a degraded
+  (missing-shard) store are recorded as explicit events.
+
 ### Fixed
 
 - **Sharded-store data-loss safety** (aligned to the web client): the CLI no
