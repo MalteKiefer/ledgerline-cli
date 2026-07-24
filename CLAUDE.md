@@ -41,6 +41,12 @@ decision wins and the disagreement is logged here (§13), not silently resolved.
     clients tag `embModel` authoritatively (§8.5) — ADOPTED: `ProcessResult.Model`
     parsed; `pickEmbModel` uses the server model for a server-produced embedding,
     the local model for a local-analyzer embedding, fallback to configured.
+  - `a6e21ec3`/`34e4ce4f`/`4fff782b` sharded-store SAFETY (2026-07-24): stop
+    eager freed-blob deletion (data-loss race), send `shards[]` integrity guard on
+    every store PUT, tolerate a 404 shard as degraded read-only. ALL ADOPTED
+    (§12). Logging commits (`efe94e01`/`96c2a409`/`5f3ebc39`/`e8a22112`/`847430ca`)
+    are server-side admin audit — no CLI/client component; the server logs the
+    CLI's requests automatically.
 - **Divergence from spec:** none currently known.
 - **Contract elements this client owns:** `internal/canonicaljson` (canonical
   JSON §5.2), `internal/crypto` FileCrypto blob frame + manifest seal + hybrid
@@ -218,12 +224,21 @@ correctness/interop defects — conformance is green):
   statistical timing-distribution test is still deferred (flaky).
 - memory-ceiling cgroup INTEGRATION test at 18k (the guard's parsers are
   unit-tested; a real-cgroup run is CI infra) — open.
-- DONE 2026-07-22: the CLI now reclaims its OWN freed blobs after a successful
-  re-seal — freed record shards (both stores) + a replaced folders collection
-  blob (files) are DELETEd, but only after the new root PUT succeeds (an
-  interrupted/failed delete leaves a harmless orphan, never data loss). This is
-  targeted and safe; the CLI still does NOT trigger the destructive full-live-set
-  `/blobs/reconcile` sweep — that decision is in §13.
+- REVERTED 2026-07-24: the eager freed-blob reclaim (added 2026-07-22) is GONE.
+  Web found it is a data-loss RACE (commit `a6e21ec3`): with a concurrent writer,
+  freeing a ref the winning writer reuses on a 409 re-seal dangles that root →
+  404 → corrupt index. The CLI no longer deletes any superseded shard/collection
+  blob on save; orphans are reclaimed by the server's grace-gated reconcile. The
+  CLI still does NOT trigger the full-live-set `/blobs/reconcile` sweep (§13).
+- DONE 2026-07-24: store-PUT referential-integrity guard — every sharded flush
+  (gallery+files) sends `shards[]` (live record-shard + collection-blob refs);
+  the server rejects (422 `missing_shard`) a root that dangles at a shard with no
+  ledger row → surfaced as `api.ErrMissingShard`. Aligned to web `34e4ce4f`.
+- DONE 2026-07-24: 404-tolerant degraded load — a permanently-missing record
+  shard is skipped (store goes read-only, `Degraded()`), so surviving records
+  load and Save is refused (`ErrDegraded`) rather than re-sealing a partial set
+  and losing the missing shard for good. Any non-404 error still aborts the load.
+  Aligned to web `a6e21ec3`/`4fff782b`.
 - DONE 2026-07-22: TLS floor raised to 1.3 (`MinVersion: VersionTLS13`).
 - DONE 2026-07-22: content-addressed CIPHERTEXT shard cache
   (`internal/blobcache`, wired into gallery+files loads, purged on logout) so
@@ -280,7 +295,10 @@ correctness/interop defects — conformance is green):
 
 ## 15. Changelog
 
-- 2026-07-22 `<pending>` feat: content-addressed ciphertext shard cache
+- 2026-07-24 `<pending>` fix(sharded-store): align to web safety fixes — remove
+  eager freed-blob delete (data-loss race), `shards[]` PUT integrity guard (422
+  missing_shard), 404-tolerant degraded read-only load. Gallery+files.
+- 2026-07-22 `f1e27e1` feat: content-addressed ciphertext shard cache
   (`internal/blobcache`), purged on logout; SBOM verify ignores the module's own
   git pseudo-version.
 - 2026-07-22 `0312239` feat(files): parallel `files upload --jobs` (bounded

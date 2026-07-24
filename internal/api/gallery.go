@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -18,6 +19,19 @@ const uploadTimeout = 5 * time.Minute
 // ErrVersionConflict is returned by SaveGalleryStore when the server's manifest
 // version has moved on and the caller must reload, re-apply and retry.
 var ErrVersionConflict = fmt.Errorf("gallery store version conflict")
+
+// ErrMissingShard is returned when the server rejects a store PUT (422
+// missing_shard) because the new root references a blob with no ledger row — i.e.
+// a shard upload never durably landed. The write is refused to prevent persisting
+// a root that dangles at a missing shard (the sharded-store data-loss failure
+// mode). The caller must NOT drop the ref; retry after the upload settles.
+var ErrMissingShard = fmt.Errorf("store rejected: root references a shard with no stored blob (missing_shard)")
+
+// isMissingShard reports whether an APIError carries the missing_shard code.
+func isMissingShard(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Code == "missing_shard"
+}
 
 // SealedStore is the opaque manifest envelope: ciphertext plus a monotonic
 // version for optimistic concurrency.
@@ -35,11 +49,13 @@ func (c *Client) GalleryStore(ctx context.Context) (SealedStore, error) {
 	return out, nil
 }
 
-// SaveGalleryStore writes the sealed manifest at the expected version. On a 409
-// it returns ErrVersionConflict; the caller reloads and retries. It returns the
-// new server version on success.
-func (c *Client) SaveGalleryStore(ctx context.Context, ciphertext string, version int64) (int64, error) {
-	body := map[string]any{"ciphertext": ciphertext, "version": version}
+// SaveGalleryStore writes the sealed manifest at the expected version. shards is
+// the live blob refs the new root points at (record shards + collection blobs);
+// the server rejects the write (422 missing_shard) if any ref has no stored blob,
+// preventing a dangling-shard save. On a 409 it returns ErrVersionConflict; on a
+// missing_shard 422, ErrMissingShard. It returns the new server version on success.
+func (c *Client) SaveGalleryStore(ctx context.Context, ciphertext string, version int64, shards []string) (int64, error) {
+	body := map[string]any{"ciphertext": ciphertext, "version": version, "shards": shards}
 	var out struct {
 		Version int64 `json:"version"`
 	}
@@ -47,6 +63,9 @@ func (c *Client) SaveGalleryStore(ctx context.Context, ciphertext string, versio
 	if err != nil {
 		if Status(err) == http.StatusConflict {
 			return 0, ErrVersionConflict
+		}
+		if isMissingShard(err) {
+			return 0, ErrMissingShard
 		}
 		return 0, err
 	}
@@ -62,12 +81,6 @@ func (c *Client) UploadGalleryBlob(ctx context.Context, data []byte) (string, er
 // GetGalleryBlob downloads an opaque blob's bytes (still encrypted).
 func (c *Client) GetGalleryBlob(ctx context.Context, id string) ([]byte, error) {
 	return c.getBlob(ctx, "/api/v1/gallery/raw/"+id)
-}
-
-// DeleteGalleryBlob removes a gallery blob (idempotent server-side). Used to
-// reclaim a shard blob the root no longer references after a re-seal.
-func (c *Client) DeleteGalleryBlob(ctx context.Context, id string) error {
-	return c.deleteBlob(ctx, "/api/v1/gallery/blob/"+id)
 }
 
 // ProcessFace is one detected face in a ProcessResult.

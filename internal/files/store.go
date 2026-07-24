@@ -77,7 +77,17 @@ type Store struct {
 	root        map[string]json.RawMessage // preserve unknown root keys
 	ops         []op
 	cache       *blobcache.Cache // optional ciphertext shard cache (nil = disabled)
+
+	// degraded is set when a load skipped a permanently-missing (404) record
+	// shard; the store is then READ-ONLY so a partial set is never re-sealed.
+	degraded      bool
+	missingShards int
 }
+
+// Degraded reports whether the last load skipped a permanently-missing shard;
+// the store is then read-only. MissingShards is how many were skipped.
+func (s *Store) Degraded() bool     { return s.degraded }
+func (s *Store) MissingShards() int { return s.missingShards }
 
 // NewStore builds a Files store bound to a client and unlocked vault key.
 func NewStore(client *api.Client, vaultKey []byte) *Store {
@@ -103,6 +113,8 @@ func (s *Store) Load(ctx context.Context) error {
 	s.shardBits = 0
 	s.foldersDesc = nil
 	s.root = map[string]json.RawMessage{}
+	s.degraded = false
+	s.missingShards = 0
 
 	if sealed.Ciphertext == "" {
 		return nil
@@ -148,8 +160,10 @@ func (s *Store) Load(ctx context.Context) error {
 	return nil
 }
 
-// loadShards downloads, decrypts and concatenates every shard's file records. A
-// failed shard aborts the load rather than silently dropping records.
+// loadShards downloads, decrypts and concatenates every shard's file records.
+// A permanently-missing (404 after retries) shard is tolerated — skipped, the
+// store goes degraded READ-ONLY (Save frozen so a partial set is never re-sealed,
+// which would lose the missing shard's records) — while any other failure aborts.
 func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawMessage, error) {
 	fromCache := make(map[string][]byte)
 	var miss []string
@@ -170,6 +184,11 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 			if blob, ok = batched[sh.Ref]; !ok {
 				var err error
 				if blob, err = s.fetchBlobWithRetry(ctx, sh.Ref); err != nil {
+					if api.Status(err) == 404 {
+						s.degraded = true
+						s.missingShards++
+						continue
+					}
 					return nil, fmt.Errorf("fetch files shard %d/%d: %w", i+1, len(shards), err)
 				}
 			}
@@ -322,11 +341,19 @@ func (s *Store) FileBlobs(id string) []string {
 // Dirty reports whether there are unsaved changes.
 func (s *Store) Dirty() bool { return len(s.ops) > 0 }
 
+// ErrDegraded is returned by Save when the store loaded in a degraded (read-only)
+// state because a record shard is permanently missing. Re-sealing would drop the
+// missing shard's records for good, so writes are refused.
+var ErrDegraded = errors.New("files: store is degraded (a record shard is missing) — refusing to save so no data is lost; restore the missing shard or contact support")
+
 // Save re-seals only the changed buckets + folders blob + root, retrying on a
 // version conflict by reloading and re-applying the staged operations.
 func (s *Store) Save(ctx context.Context) error {
 	if len(s.ops) == 0 {
 		return nil
+	}
+	if s.degraded {
+		return ErrDegraded
 	}
 	for attempt := 0; attempt < maxSaveRetries; attempt++ {
 		if err := s.saveOnce(ctx); err != nil {
@@ -367,16 +394,18 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	newVersion, err := s.client.SaveFilesStore(ctx, sealed, s.version)
+	// Referential-integrity guard: every live blob ref the new root points at
+	// (record shards + the folders collection blob). A superseded shard/collection
+	// blob is deliberately NOT deleted here — eagerly freeing a ref a concurrent
+	// writer reuses would dangle its root and lose data. Orphans are reclaimed by
+	// the server's grace-gated reconcile.
+	live := shardRefsOf(descriptors)
+	if foldersDesc != nil && foldersDesc.Ref != "" {
+		live = append(live, foldersDesc.Ref)
+	}
+	newVersion, err := s.client.SaveFilesStore(ctx, sealed, s.version, live)
 	if err != nil {
 		return err
-	}
-	// Reclaim blobs the new root no longer references (best-effort, after the
-	// successful PUT — an interrupted delete leaves a harmless orphan, never data
-	// loss): freed record shards plus a replaced folders collection blob.
-	freed := freedShardRefs(s.shards, descriptors)
-	if s.foldersDesc != nil && s.foldersDesc.Ref != "" && (foldersDesc == nil || foldersDesc.Ref != s.foldersDesc.Ref) {
-		freed = append(freed, s.foldersDesc.Ref)
 	}
 	s.version = newVersion
 	s.shards = descriptors
@@ -385,28 +414,7 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	// Fold the applied ops into the base so a subsequent Save starts clean.
 	s.baseFiles = files
 	s.baseFolders = folders
-	for _, ref := range freed {
-		_ = s.client.DeleteFileBlob(ctx, ref)
-	}
 	return nil
-}
-
-// freedShardRefs returns refs present in old but absent from next — shard blobs
-// the re-sealed root no longer references.
-func freedShardRefs(old, next []shardDesc) []string {
-	live := make(map[string]bool, len(next))
-	for _, d := range next {
-		if d.Ref != "" {
-			live[d.Ref] = true
-		}
-	}
-	var freed []string
-	for _, d := range old {
-		if d.Ref != "" && !live[d.Ref] {
-			freed = append(freed, d.Ref)
-		}
-	}
-	return freed
 }
 
 // buildShards buckets file records by id, re-seals only the buckets whose

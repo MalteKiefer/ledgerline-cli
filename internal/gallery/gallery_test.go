@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -62,13 +63,14 @@ func TestPairItemsLivePhoto(t *testing.T) {
 // mockServer emulates the vault + gallery endpoints against an in-memory blob
 // store, so the pipeline can be exercised end to end.
 type mockServer struct {
-	srv     *httptest.Server
-	vk      []byte
-	mu      sync.Mutex
-	blobs   map[string][]byte
-	store   string
-	version int64
-	nextID  int
+	srv        *httptest.Server
+	vk         []byte
+	mu         sync.Mutex
+	blobs      map[string][]byte
+	store      string
+	version    int64
+	nextID     int
+	lastShards []string // shards[] from the most recent store PUT (integrity guard)
 }
 
 func newMockServer(t *testing.T, passphrase string) *mockServer {
@@ -110,8 +112,9 @@ func newMockServer(t *testing.T, passphrase string) *mockServer {
 			return
 		}
 		var body struct {
-			Ciphertext string `json:"ciphertext"`
-			Version    int64  `json:"version"`
+			Ciphertext string   `json:"ciphertext"`
+			Version    int64    `json:"version"`
+			Shards     []string `json:"shards"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.Version != m.version {
@@ -119,6 +122,7 @@ func newMockServer(t *testing.T, passphrase string) *mockServer {
 			w.Write([]byte(`{"error":"version_conflict"}`))
 			return
 		}
+		m.lastShards = body.Shards
 		m.store = body.Ciphertext
 		m.version++
 		json.NewEncoder(w).Encode(map[string]any{"version": m.version})
@@ -587,5 +591,89 @@ func TestPickEmbModel(t *testing.T) {
 				t.Fatalf("pickEmbModel = %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestGallerySavePUTCarriesLiveShards asserts the integrity guard (web 34e4ce4f):
+// the gallery store PUT carries the live blob refs the new root points at.
+func TestGallerySavePUTCarriesLiveShards(t *testing.T) {
+	const pass = "correct horse battery staple"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+	vk, err := vault.Unlock(ctx, client, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "IMG_1.jpg")
+	if err := os.WriteFile(path, []byte("PHOTO-BYTES-1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk, false, false, nil) // partial record, no egress
+	if _, _, err := up.Upload(ctx, Item{StillPath: path}, []byte("PHOTO-BYTES-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.lastShards) == 0 || m.lastShards[0] != store.shards[0].Ref {
+		t.Fatalf("PUT shards[] = %v, want live shard ref %v", m.lastShards, store.shards)
+	}
+}
+
+// TestGalleryMissingShardDegradesReadOnly asserts web a6e21ec3/4fff782b for the
+// gallery: a permanently-missing (404) record shard degrades the store to
+// read-only rather than failing the whole load or self-erasing the root.
+func TestGalleryMissingShardDegradesReadOnly(t *testing.T) {
+	const pass = "correct horse battery staple"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+	vk, err := vault.Unlock(ctx, client, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "IMG_1.jpg")
+	if err := os.WriteFile(path, []byte("PHOTO-BYTES-1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk, false, false, nil)
+	if _, _, err := up.Upload(ctx, Item{StillPath: path}, []byte("PHOTO-BYTES-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drop every stored blob so the record shard 404s permanently.
+	m.mu.Lock()
+	m.blobs = map[string][]byte{}
+	m.mu.Unlock()
+
+	fresh := NewStore(client, vk)
+	if err := fresh.Load(ctx); err != nil {
+		t.Fatalf("load should tolerate a 404 shard, got: %v", err)
+	}
+	if !fresh.Degraded() || fresh.MissingShards() != 1 {
+		t.Fatalf("expected degraded 1 missing, got degraded=%v missing=%d", fresh.Degraded(), fresh.MissingShards())
+	}
+	fresh.added = append(fresh.added, &PhotoRecord{ID: "deadbeef", Sig: "x"})
+	if err := fresh.Save(ctx); !errors.Is(err, ErrDegraded) {
+		t.Fatalf("Save on degraded gallery = %v, want ErrDegraded", err)
 	}
 }
