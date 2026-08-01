@@ -85,6 +85,37 @@ func TestServiceStopsOnAuthFatal(t *testing.T) {
 	}
 }
 
+func TestServiceStopsOnAuthFatalDuringBlobUpload(t *testing.T) {
+	// The common auth-expiry case: the token dies while blob uploads are in
+	// flight, so the 401 lands on /files/upload, not the manifest store. The
+	// syncer must surface it (via Syncer.authErr) so runPass returns fatal.
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	mk := newMock(t, "pass")
+	client := mk.client(t)
+	vk, err := vault.Unlock(context.Background(), client, "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(client, vk)
+	if err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	local := t.TempDir()
+	os.WriteFile(filepath.Join(local, "a.txt"), []byte("x"), 0o600)
+
+	// Manifest store is healthy; only blob uploads 401.
+	mk.mu.Lock()
+	mk.failUpload = http.StatusUnauthorized
+	mk.mu.Unlock()
+
+	svc := &Service{Client: client, Store: store, VK: vk, Log: func(string) {}}
+	err = svc.runPass(context.Background(), ServiceMapping{Local: local,
+		Opts: SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth}})
+	if err == nil {
+		t.Fatal("want fatal auth error when a blob upload 401s, got nil")
+	}
+}
+
 func TestServiceTransientErrorDoesNotStopService(t *testing.T) {
 	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
 	mk := newMock(t, "pass")

@@ -202,9 +202,17 @@ func (s *Service) runPass(ctx context.Context, m ServiceMapping) (fatal error) {
 		s.Audit.Log(audit.Event{Event: "files.sync_pass", Outcome: audit.OutcomeError, Target: "files"})
 		return nil
 	}
-	s.logf("sync %s: ↑%d ↓%d ✗%d !%d", m.Local,
-		res.Uploaded, res.Downloaded, res.TrashedRemote+res.DeletedLocal, res.Conflicts)
-	s.Audit.Log(audit.Event{Event: "files.sync_pass", Outcome: audit.OutcomeOK, Target: "files",
+	s.logf("sync %s: ↑%d ↓%d ✗%d !%d ⚠fail%d", m.Local,
+		res.Uploaded, res.Downloaded, res.TrashedRemote+res.DeletedLocal, res.Conflicts, res.Failed)
+	// A pass that completed but left per-file failures behind must not read as
+	// a clean OK in the audit trail: mark it OutcomeError so operators can see
+	// silent per-file failures (a 401 already returned above as fatal; these
+	// are the non-fatal per-file failures counted in res.Failed).
+	outcome := audit.OutcomeOK
+	if res.Failed > 0 {
+		outcome = audit.OutcomeError
+	}
+	s.Audit.Log(audit.Event{Event: "files.sync_pass", Outcome: outcome, Target: "files",
 		Count: res.Uploaded + res.Downloaded})
 	return nil
 }

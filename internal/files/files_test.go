@@ -39,6 +39,11 @@ type mock struct {
 	// and PUT) reply with this HTTP status instead of serving the store —
 	// used to simulate auth-fatal (401) and transient (5xx) server failures.
 	failStorePut int
+
+	// failUpload, when non-zero, makes the /files/upload (blob) handler reply
+	// with this HTTP status — used to simulate a token expiring mid-pass so a
+	// 401 lands on a per-file blob operation rather than the manifest store.
+	failUpload int
 }
 
 func newMock(t *testing.T, pass string) *mock {
@@ -97,6 +102,13 @@ func newMock(t *testing.T, pass string) *mock {
 		json.NewEncoder(w).Encode(map[string]any{"version": m.version})
 	})
 	mux.HandleFunc("/api/v1/files/upload", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		fail := m.failUpload
+		m.mu.Unlock()
+		if fail != 0 {
+			w.WriteHeader(fail)
+			return
+		}
 		f, _, err := r.FormFile("file")
 		if err != nil {
 			w.WriteHeader(400)

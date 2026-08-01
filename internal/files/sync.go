@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -83,6 +84,14 @@ type Syncer struct {
 	localDir   string
 	remoteBase string
 	opts       SyncOptions
+
+	// authErr captures the first auth-fatal (HTTP 401) error seen during a
+	// per-file operation in a pass. Per-file failures are otherwise swallowed
+	// into res.Failed (see fail); an expired token, though, means the whole
+	// pass is doomed, so Run surfaces this as its returned error, letting the
+	// service supervisor stop instead of silently reporting failures forever.
+	// Scoped per Run call (reset at the top of Run).
+	authErr error
 }
 
 // NewSyncer builds a syncer for a single mapping.
@@ -110,6 +119,7 @@ type localEntry struct {
 // Run executes one bidirectional pass and persists the new sync state.
 func (s *Syncer) Run(ctx context.Context) (SyncResult, error) {
 	var res SyncResult
+	s.authErr = nil // scope auth-fatal detection to this pass
 
 	prev, err := loadSyncState(s.localDir, s.remoteBase)
 	if err != nil {
@@ -154,6 +164,13 @@ func (s *Syncer) Run(ctx context.Context) (SyncResult, error) {
 		if err := saveSyncState(s.localDir, s.remoteBase, next); err != nil {
 			return res, err
 		}
+	}
+	// A per-file 401 means the token is dead — surface it so the caller (the
+	// service supervisor, or a one-shot `files sync`) stops rather than
+	// silently reporting failures. Non-401 per-file failures stay counted in
+	// res.Failed with a nil error.
+	if s.authErr != nil {
+		return res, s.authErr
 	}
 	return res, nil
 }
@@ -348,6 +365,9 @@ func (s *Syncer) conflict(ctx context.Context, rel string, l *localEntry, r Entr
 
 func (s *Syncer) fail(rel string, err error, res *SyncResult) (fileState, bool) {
 	res.Failed++
+	if s.authErr == nil && api.Status(err) == http.StatusUnauthorized {
+		s.authErr = err // remember the first auth-fatal; Run surfaces it
+	}
 	s.opts.Log(fmt.Sprintf("  failed %s: %v", rel, err))
 	return fileState{}, false
 }
