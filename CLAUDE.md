@@ -58,7 +58,10 @@ decision wins and the disagreement is logged here (§13), not silently resolved.
   + `/gallery/raw/{blob}` + `/gallery/process`, `GET/PUT /files/store` +
   `/files/upload` + `/files/raw/{blob}` + `/files/blob/{blob}`. Upload → `{id}`
   (IdResponse); store GET/PUT → `{ciphertext,version}` / `{version}`; 409 =
-  version_conflict. Monolith `/store` is removed.
+  version_conflict. Monolith `/store` is removed. Gallery/files store PUT bodies
+  also carry an OPTIONAL `counts` map (`{"photos","albums","people"}` /
+  `{"files","fileFolders"}`) feeding the server's anomaly-scan (silent data-loss
+  detection) — COMPLETE-or-omitted only (§13 safety rule; never partial).
 
 ## 3. Threat model & trust boundaries
 
@@ -266,6 +269,19 @@ JSON audit trail.
   deterministic `ct/dk` KAT values are validated JS-side; Go pins `ekSha256`
   (seed→ek, matches @noble exactly) + a live encaps→decaps round-trip.
 
+- **Gallery/files store-PUT `counts` map is COMPLETE-or-omitted, never partial**
+  (2026-08-01). The server's `store:anomaly-scan` sums a version's `counts` map
+  and compares it against the previous version to flag a silent-data-loss
+  regression; a key the map omits reads as a false 0. Files' two slices (file
+  records + folders) are always fully known to this client, so its map is always
+  complete. Gallery's albums/people are opaque collection blobs this client
+  carries but never edits; counting them requires an extra fetch+decrypt per
+  save. If that fetch/decrypt fails for a PRESENT collection, the CLI sends NO
+  `counts` key at all that round (never `{photos:N, albums:0, people:0}`) — a
+  missing map is silently skipped by the scan, but a wrong map would fire a false
+  alarm against a concurrent web-client write. The save itself still succeeds;
+  only the counts metadata is skipped. Successful collection counts are memoized
+  by ref (content-addressed + never edited by this client, so immutable).
 - **Full-live-set reconcile is intentionally NOT triggered by the CLI**
   (2026-07-22). `/gallery|files/blobs/reconcile` GC-sweeps every blob NOT in a
   caller-supplied live-set; a live-set missing any ref class (incl. face-crop
@@ -286,6 +302,16 @@ JSON audit trail.
 
 ## 15. Changelog
 
+- 2026-08-01 feat(store): send per-slice counts on gallery+files PUT for
+  anomaly-scan (complete-or-omit). `internal/api` `SaveGalleryStore`/
+  `SaveFilesStore` gained a `counts map[string]int` param sent as the body's
+  `counts` key only when non-nil. Files' `{"files","fileFolders"}` map is always
+  complete (both slices are fully known locally). Gallery's
+  `{"photos","albums","people"}` map is complete-or-nil: albums/people are opaque
+  collection blobs needing a fetch+decrypt to count, and ANY failure counting a
+  present one aborts the whole map to nil rather than sending a false partial
+  count (§13 safety rule) — the save itself still succeeds. No change to
+  ciphertext/shards/canonical bytes or shard hashing.
 - 2026-08-01 feat(files): files sync --service — continuous watch+interval sync client (fsnotify), per-mapping policy in settings.json, unattended sanity-guard (pause vs mass-delete), single-instance lock, graceful SIGINT/SIGTERM shutdown, auth-expiry stop.
 - 2026-07-24 `e709de6` feat(audit): local JSONL operation audit trail
   (`internal/audit`, uniform command hook + domain events; 0600, rotated, no

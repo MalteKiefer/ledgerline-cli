@@ -70,7 +70,8 @@ type mockServer struct {
 	store      string
 	version    int64
 	nextID     int
-	lastShards []string // shards[] from the most recent store PUT (integrity guard)
+	lastShards []string       // shards[] from the most recent store PUT (integrity guard)
+	lastCounts map[string]int // counts{} from the most recent store PUT (anomaly-scan; nil if omitted)
 }
 
 func newMockServer(t *testing.T, passphrase string) *mockServer {
@@ -112,9 +113,10 @@ func newMockServer(t *testing.T, passphrase string) *mockServer {
 			return
 		}
 		var body struct {
-			Ciphertext string   `json:"ciphertext"`
-			Version    int64    `json:"version"`
-			Shards     []string `json:"shards"`
+			Ciphertext string         `json:"ciphertext"`
+			Version    int64          `json:"version"`
+			Shards     []string       `json:"shards"`
+			Counts     map[string]int `json:"counts"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.Version != m.version {
@@ -123,6 +125,7 @@ func newMockServer(t *testing.T, passphrase string) *mockServer {
 			return
 		}
 		m.lastShards = body.Shards
+		m.lastCounts = body.Counts
 		m.store = body.Ciphertext
 		m.version++
 		json.NewEncoder(w).Encode(map[string]any{"version": m.version})
@@ -416,6 +419,161 @@ func (m *mockServer) addBlob(t *testing.T, plaintext []byte) (ref, key string) {
 	m.blobs[ref] = blob
 	m.mu.Unlock()
 	return ref, encKey
+}
+
+// seedGalleryRoot seals a v3 gallery root directly into the mock store: photos
+// go into a single record shard (shardBits 0). A non-nil albums/people slice
+// seeds its own content-addressed collection blob (ref+key set in the root,
+// even when the slice is empty — a present-but-empty collection); nil leaves
+// the ref absent (an unset collection, treated as count 0 with no fetch).
+func (m *mockServer) seedGalleryRoot(t *testing.T, photos, albums, people []any) {
+	t.Helper()
+	root := map[string]any{"v": 3, "suite": 1, "shardBits": 0, "caps": map[string]any{}}
+
+	photosJSON, err := json.Marshal(photos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, key := m.addBlob(t, photosJSON)
+	root["shards"] = []map[string]any{{
+		"ref": ref, "key": key, "hash": "seed", "count": len(photos), "bucket": 0,
+	}}
+
+	if albums != nil {
+		aref, akey := m.addBlob(t, mustMarshal(t, albums))
+		root["albumsRef"], root["albumsKey"] = aref, akey
+	}
+	if people != nil {
+		pref, pkey := m.addBlob(t, mustMarshal(t, people))
+		root["peopleRef"], root["peopleKey"] = pref, pkey
+	}
+
+	raw, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := crypto.SealManifest(raw, m.vk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.store = sealed
+	m.mu.Unlock()
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestGallerySavePUTCarriesCompleteCounts asserts the anomaly-scan metadata: a
+// save with a fully-fetchable albums/people collection sends a COMPLETE
+// {"photos","albums","people"} count map.
+func TestGallerySavePUTCarriesCompleteCounts(t *testing.T) {
+	const pass = "correct horse battery staple"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+	vk, err := vault.Unlock(ctx, client, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.seedGalleryRoot(t,
+		[]any{
+			map[string]any{"id": "aaaa0000aaaa0000", "sig": "s1"},
+			map[string]any{"id": "bbbb0000bbbb0000", "sig": "s2"},
+		},
+		[]any{map[string]any{"id": "album1", "name": "Trip"}},
+		[]any{map[string]any{"id": "person1", "name": "Ada"}},
+	)
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "IMG_1.jpg")
+	if err := os.WriteFile(path, []byte("PHOTO-BYTES-1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk, false, false, nil)
+	if _, _, err := up.Upload(ctx, Item{StillPath: path}, []byte("PHOTO-BYTES-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastCounts == nil {
+		t.Fatal("expected a complete counts map, got none")
+	}
+	if m.lastCounts["photos"] != 3 || m.lastCounts["albums"] != 1 || m.lastCounts["people"] != 1 {
+		t.Fatalf("counts = %v, want photos:3 albums:1 people:1", m.lastCounts)
+	}
+}
+
+// TestGallerySaveOmitsCountsOnCollectionFetchFailure asserts the SAFETY rule: if
+// a present albums/people collection blob can't be fetched/decrypted, the whole
+// counts map is omitted (nil) rather than sent partial — sending photos-only
+// would read as albums:0/people:0 to the server's anomaly-scan and could raise a
+// false data-loss alarm. The save itself must still succeed.
+func TestGallerySaveOmitsCountsOnCollectionFetchFailure(t *testing.T) {
+	const pass = "correct horse battery staple"
+	m := newMockServer(t, pass)
+	client := m.client(t)
+	ctx := context.Background()
+	vk, err := vault.Unlock(ctx, client, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.seedGalleryRoot(t,
+		[]any{map[string]any{"id": "aaaa0000aaaa0000", "sig": "s1"}},
+		[]any{map[string]any{"id": "album1", "name": "Trip"}},
+		nil,
+	)
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the seeded albums collection blob permanently unreachable so counting
+	// it fails (a 404), without touching the photo record shard.
+	albumsRef := rootString(store.root, "albumsRef")
+	if albumsRef == "" {
+		t.Fatal("expected the seeded albumsRef to be set")
+	}
+	m.mu.Lock()
+	delete(m.blobs, albumsRef)
+	m.mu.Unlock()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "IMG_2.jpg")
+	if err := os.WriteFile(path, []byte("PHOTO-BYTES-2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk, false, false, nil)
+	if _, _, err := up.Upload(ctx, Item{StillPath: path}, []byte("PHOTO-BYTES-2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatalf("save must still succeed when counts can't be built: %v", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastCounts != nil {
+		t.Fatalf("expected counts omitted when a collection blob can't be fetched, got %v", m.lastCounts)
+	}
 }
 
 func TestFetchMotionAndMeta(t *testing.T) {
