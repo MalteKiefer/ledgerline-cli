@@ -94,6 +94,17 @@ type Syncer struct {
 	authErr error
 }
 
+// normalizeRemote canonicalizes a remote base path the same way everywhere it
+// is used to derive a sync-state key: backslashes become slashes, and leading
+// and trailing slashes are trimmed. NewSyncer and Service.hadState MUST both
+// route through this so they always land on the same state key for the same
+// mapping — a mismatch there defeats the vanished-local-root safety guard
+// (the guard would check a state file that's never the one the syncer reads
+// or writes).
+func normalizeRemote(remoteBase string) string {
+	return strings.Trim(strings.ReplaceAll(remoteBase, "\\", "/"), "/")
+}
+
 // NewSyncer builds a syncer for a single mapping.
 func NewSyncer(client *api.Client, store *Store, vaultKey []byte, localDir, remoteBase string, opts SyncOptions) *Syncer {
 	if opts.Log == nil {
@@ -104,7 +115,7 @@ func NewSyncer(client *api.Client, store *Store, vaultKey []byte, localDir, remo
 		up:         NewUploader(client, store, vaultKey),
 		dl:         NewDownloader(client, vaultKey),
 		localDir:   localDir,
-		remoteBase: strings.Trim(strings.ReplaceAll(remoteBase, "\\", "/"), "/"),
+		remoteBase: normalizeRemote(remoteBase),
 		opts:       opts,
 	}
 }

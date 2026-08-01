@@ -320,7 +320,7 @@ func runFilesSyncService(cmd *cobra.Command, fl syncFlags) error {
 		Log:      func(s string) { fmt.Fprintln(w, s) },
 		Audit:    auditLog(),
 		Heartbeat: func(state, detail string) bool {
-			return reportSync(ctx, client, state, detail)
+			return reportSync(context.WithoutCancel(ctx), client, state, detail)
 		},
 	}
 	fmt.Fprintf(w, "Service running (%d mappings). Ctrl-C to stop.\n", len(sms))

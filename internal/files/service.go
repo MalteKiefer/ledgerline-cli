@@ -252,7 +252,11 @@ func (s *Service) rootUnsafe(m ServiceMapping) bool {
 }
 
 // hadState reports whether a prior sync recorded any files for this mapping.
+// m.Remote must be normalized the same way NewSyncer does (normalizeRemote)
+// before deriving the state key — otherwise this reads a different state file
+// than the one the syncer actually wrote, and the safety guard silently
+// no-ops (see normalizeRemote).
 func (s *Service) hadState(m ServiceMapping) bool {
-	st, err := loadSyncState(m.Local, m.Remote)
+	st, err := loadSyncState(m.Local, normalizeRemote(m.Remote))
 	return err == nil && len(st) > 0
 }
