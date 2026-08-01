@@ -32,7 +32,8 @@ type mock struct {
 	version    int64
 	blobs      map[string][]byte
 	deleted    []string
-	lastShards []string // shards[] from the most recent store PUT (integrity guard)
+	lastShards []string       // shards[] from the most recent store PUT (integrity guard)
+	lastCounts map[string]int // counts{} from the most recent store PUT (anomaly-scan; nil if omitted)
 	seq        int
 
 	// failStorePut, when non-zero, makes the /files/store handler (both GET
@@ -87,9 +88,10 @@ func newMock(t *testing.T, pass string) *mock {
 			return
 		}
 		var body struct {
-			Ciphertext string   `json:"ciphertext"`
-			Version    int64    `json:"version"`
-			Shards     []string `json:"shards"`
+			Ciphertext string         `json:"ciphertext"`
+			Version    int64          `json:"version"`
+			Shards     []string       `json:"shards"`
+			Counts     map[string]int `json:"counts"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.Version != m.version {
@@ -97,6 +99,7 @@ func newMock(t *testing.T, pass string) *mock {
 			return
 		}
 		m.lastShards = body.Shards
+		m.lastCounts = body.Counts
 		m.store = body.Ciphertext
 		m.version++
 		json.NewEncoder(w).Encode(map[string]any{"version": m.version})
@@ -817,6 +820,44 @@ func TestSavePUTCarriesLiveShards(t *testing.T) {
 	// The one live record shard ref must be present.
 	if len(store.shards) != 1 || m.lastShards[0] != store.shards[0].Ref {
 		t.Fatalf("shards[] = %v, want the live shard ref %v", m.lastShards, store.shards)
+	}
+}
+
+// TestSavePUTCarriesCompleteCounts asserts the anomaly-scan metadata: the Files
+// store PUT always carries a COMPLETE {"files","fileFolders"} count map, since
+// both slices are always fully known to this client (no opaque collections like
+// gallery albums/people).
+func TestSavePUTCarriesCompleteCounts(t *testing.T) {
+	m := newMock(t, "pw")
+	client := m.client(t)
+	ctx := context.Background()
+	vk, _ := vault.Unlock(ctx, client, "pw")
+	m.seedFiles(t, []any{
+		map[string]any{"id": "0f00", "name": "a.txt", "blob": "content_a", "encFileKey": "{}", "size": 1, "folder": nil},
+		map[string]any{"id": "0f01", "name": "b.txt", "blob": "content_b", "encFileKey": "{}", "size": 1, "folder": nil},
+	}, []any{
+		map[string]any{"id": "f1", "name": "docs", "parent": nil},
+	}, nil)
+
+	store := NewStore(client, vk)
+	if err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := NewUploader(client, store, vk)
+	if _, _, err := up.Create(ctx, "c.txt", "text/plain", "2021-01-01T00:00:00Z", []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastCounts == nil {
+		t.Fatal("expected a complete counts map, got none")
+	}
+	if m.lastCounts["files"] != 3 || m.lastCounts["fileFolders"] != 1 {
+		t.Fatalf("counts = %v, want files:3 fileFolders:1", m.lastCounts)
 	}
 }
 

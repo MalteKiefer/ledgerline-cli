@@ -52,10 +52,18 @@ func (c *Client) GalleryStore(ctx context.Context) (SealedStore, error) {
 // SaveGalleryStore writes the sealed manifest at the expected version. shards is
 // the live blob refs the new root points at (record shards + collection blobs);
 // the server rejects the write (422 missing_shard) if any ref has no stored blob,
-// preventing a dangling-shard save. On a 409 it returns ErrVersionConflict; on a
-// missing_shard 422, ErrMissingShard. It returns the new server version on success.
-func (c *Client) SaveGalleryStore(ctx context.Context, ciphertext string, version int64, shards []string) (int64, error) {
+// preventing a dangling-shard save. counts is an optional per-slice record-count
+// map ({"photos","albums","people"}) feeding the server's anomaly-scan (silent
+// data-loss detection); pass nil to omit it entirely — a caller must NEVER send
+// a partial/incomplete map, since a missing key reads as a false 0 count and can
+// trigger a false data-loss alarm when interleaved with another client's writes.
+// On a 409 it returns ErrVersionConflict; on a missing_shard 422, ErrMissingShard.
+// It returns the new server version on success.
+func (c *Client) SaveGalleryStore(ctx context.Context, ciphertext string, version int64, shards []string, counts map[string]int) (int64, error) {
 	body := map[string]any{"ciphertext": ciphertext, "version": version, "shards": shards}
+	if counts != nil {
+		body["counts"] = counts
+	}
 	var out struct {
 		Version int64 `json:"version"`
 	}

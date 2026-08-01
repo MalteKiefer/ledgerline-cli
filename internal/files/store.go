@@ -208,6 +208,16 @@ func (s *Store) loadShards(ctx context.Context, shards []shardDesc) ([]json.RawM
 	return recs, nil
 }
 
+// sumDescriptorCounts totals the per-bucket record counts across a shard set —
+// the "files" slice count for the anomaly-scan counts map.
+func sumDescriptorCounts(descriptors []shardDesc) int {
+	total := 0
+	for _, d := range descriptors {
+		total += d.Count
+	}
+	return total
+}
+
 // shardRefsOf returns the non-empty refs of a shard set.
 func shardRefsOf(shards []shardDesc) []string {
 	refs := make([]string, 0, len(shards))
@@ -403,7 +413,15 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	if foldersDesc != nil && foldersDesc.Ref != "" {
 		live = append(live, foldersDesc.Ref)
 	}
-	newVersion, err := s.client.SaveFilesStore(ctx, sealed, s.version, live)
+	// Files' two slices (file records + folders) are always fully known to this
+	// client — no opaque collections like gallery's albums/people — so the count
+	// map is always complete; it feeds the server's anomaly-scan (silent
+	// data-loss detection) and is never partial (contract §2/openapi).
+	counts := map[string]int{
+		collFiles:   sumDescriptorCounts(descriptors),
+		collFolders: len(folders),
+	}
+	newVersion, err := s.client.SaveFilesStore(ctx, sealed, s.version, live, counts)
 	if err != nil {
 		return err
 	}

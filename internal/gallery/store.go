@@ -58,6 +58,12 @@ type Store struct {
 	// and lose its records for good). missingShards counts the skipped shards.
 	degraded      bool
 	missingShards int
+
+	// collCountCache memoizes a collection blob's record count by ref. Refs are
+	// content-addressed/immutable and this client never edits albums/people, so
+	// the same ref always yields the same count — safe to reuse across saves in
+	// the same process.
+	collCountCache map[string]int
 }
 
 // Degraded reports whether the last load skipped a permanently-missing shard;
@@ -458,7 +464,14 @@ func (s *Store) saveOnce(ctx context.Context) error {
 	// lose data. Orphans are reclaimed by the server's grace-gated reconcile.
 	live := shardRefs(descriptors)
 	live = append(live, s.collectionRefs()...)
-	newVersion, err := s.client.SaveGalleryStore(ctx, sealed, s.version, live)
+
+	photos := 0
+	for _, d := range descriptors {
+		photos += d.Count
+	}
+	counts := s.buildCounts(ctx, photos)
+
+	newVersion, err := s.client.SaveGalleryStore(ctx, sealed, s.version, live, counts)
 	if err != nil {
 		return err
 	}
@@ -478,6 +491,59 @@ func (s *Store) collectionRefs() []string {
 		}
 	}
 	return refs
+}
+
+// collectionCount fetches and decrypts a content-addressed collection blob
+// (albums/people) and returns its record count. An empty ref means the
+// collection is absent — count 0, no fetch. It reuses the exact shard decode
+// path (loadShards): GetGalleryBlob + DecryptContent + array length, with no
+// retry — any fetch or decrypt failure here means the caller must abort the
+// whole counts map for this save (a partial map is a correctness bug for the
+// server's anomaly-scan, §2). Successful counts are memoized by ref since a
+// content-addressed ref this client never edits always yields the same count.
+func (s *Store) collectionCount(ctx context.Context, ref, key string) (int, error) {
+	if ref == "" {
+		return 0, nil
+	}
+	if n, ok := s.collCountCache[ref]; ok {
+		return n, nil
+	}
+	blob, err := s.client.GetGalleryBlob(ctx, ref)
+	if err != nil {
+		return 0, err
+	}
+	plain, err := crypto.DecryptContent(blob, key, s.vk)
+	if err != nil {
+		return 0, err
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(plain, &arr); err != nil {
+		return 0, err
+	}
+	if s.collCountCache == nil {
+		s.collCountCache = map[string]int{}
+	}
+	s.collCountCache[ref] = len(arr)
+	return len(arr), nil
+}
+
+// buildCounts assembles the per-slice record-count map ({"photos","albums",
+// "people"}) the server's anomaly-scan uses to flag a silent-data-loss
+// regression. It is COMPLETE-or-nil (§2): a save must never send a partial map
+// — a missing key reads as a false 0 to the daily scan and can trigger a false
+// data-loss alarm when interleaved with another client's write — so ANY
+// failure counting a present albums/people collection aborts the whole map to
+// nil. The save itself still proceeds; it simply omits counts this round.
+func (s *Store) buildCounts(ctx context.Context, photos int) map[string]int {
+	albums, err := s.collectionCount(ctx, rootString(s.root, "albumsRef"), rootString(s.root, "albumsKey"))
+	if err != nil {
+		return nil
+	}
+	people, err := s.collectionCount(ctx, rootString(s.root, "peopleRef"), rootString(s.root, "peopleKey"))
+	if err != nil {
+		return nil
+	}
+	return map[string]int{"photos": photos, "albums": albums, "people": people}
 }
 
 // rootString reads a string-valued key from a raw root map (empty when absent).

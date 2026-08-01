@@ -176,7 +176,7 @@ func TestRetriesTransientStatusesThenSucceeds(t *testing.T) {
 			defer srv.Close()
 
 			c := testClient(t, srv)
-			v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3, nil)
+			v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3, nil, nil)
 			if err != nil {
 				t.Fatalf("save after retries: %v", err)
 			}
@@ -208,7 +208,7 @@ func TestRetriesTransientTransportError(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(t, srv)
-	v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3, nil)
+	v, err := c.SaveGalleryStore(context.Background(), "ciphertext", 3, nil, nil)
 	if err != nil {
 		t.Fatalf("save after transport retry: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestGivesUpAfterMaxRetries(t *testing.T) {
 	c := testClient(t, srv)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := c.SaveGalleryStore(ctx, "ciphertext", 3, nil)
+	_, err := c.SaveGalleryStore(ctx, "ciphertext", 3, nil, nil)
 	if Status(err) != http.StatusTooManyRequests && err != context.DeadlineExceeded {
 		t.Fatalf("expected a 429 or deadline after exhausting retries, got %v", err)
 	}
@@ -245,4 +245,101 @@ func testClient(t *testing.T, srv *httptest.Server) *Client {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// captureBody starts a mock store server that decodes the PUT body into
+// gotBody (a pointer set by the caller) and always answers a version bump.
+func captureBody(t *testing.T, gotBody *map[string]json.RawMessage) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":2}`))
+	}))
+}
+
+// TestSaveGalleryStoreSendsCountsWhenNonNil asserts the anomaly-scan metadata
+// (per-slice record counts) rides along on the store PUT body when the caller
+// supplies a complete map.
+func TestSaveGalleryStoreSendsCountsWhenNonNil(t *testing.T) {
+	var gotBody map[string]json.RawMessage
+	srv := captureBody(t, &gotBody)
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	counts := map[string]int{"photos": 3, "albums": 1, "people": 0}
+	if _, err := c.SaveGalleryStore(context.Background(), "ct", 1, nil, counts); err != nil {
+		t.Fatalf("SaveGalleryStore: %v", err)
+	}
+
+	raw, ok := gotBody["counts"]
+	if !ok {
+		t.Fatal("expected a counts key in the PUT body")
+	}
+	var got map[string]int
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["photos"] != 3 || got["albums"] != 1 || got["people"] != 0 {
+		t.Fatalf("counts = %v, want photos:3 albums:1 people:0", got)
+	}
+}
+
+// TestSaveGalleryStoreOmitsCountsWhenNil asserts the SAFETY rule: when the
+// caller cannot build a complete map it passes nil, and the body must omit the
+// counts key entirely (not send a partial/null value) — a version with no
+// counts is simply skipped by the server's daily anomaly scan.
+func TestSaveGalleryStoreOmitsCountsWhenNil(t *testing.T) {
+	var gotBody map[string]json.RawMessage
+	srv := captureBody(t, &gotBody)
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	if _, err := c.SaveGalleryStore(context.Background(), "ct", 1, nil, nil); err != nil {
+		t.Fatalf("SaveGalleryStore: %v", err)
+	}
+	if _, ok := gotBody["counts"]; ok {
+		t.Fatalf("counts key must be omitted when nil, got %s", gotBody["counts"])
+	}
+}
+
+// TestSaveFilesStoreSendsCountsWhenNonNil mirrors the gallery counts test for
+// the Files sealed-store PUT.
+func TestSaveFilesStoreSendsCountsWhenNonNil(t *testing.T) {
+	var gotBody map[string]json.RawMessage
+	srv := captureBody(t, &gotBody)
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	counts := map[string]int{"files": 5, "fileFolders": 2}
+	if _, err := c.SaveFilesStore(context.Background(), "ct", 1, nil, counts); err != nil {
+		t.Fatalf("SaveFilesStore: %v", err)
+	}
+
+	raw, ok := gotBody["counts"]
+	if !ok {
+		t.Fatal("expected a counts key in the PUT body")
+	}
+	var got map[string]int
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["files"] != 5 || got["fileFolders"] != 2 {
+		t.Fatalf("counts = %v, want files:5 fileFolders:2", got)
+	}
+}
+
+// TestSaveFilesStoreOmitsCountsWhenNil mirrors the gallery nil-omission test.
+func TestSaveFilesStoreOmitsCountsWhenNil(t *testing.T) {
+	var gotBody map[string]json.RawMessage
+	srv := captureBody(t, &gotBody)
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	if _, err := c.SaveFilesStore(context.Background(), "ct", 1, nil, nil); err != nil {
+		t.Fatalf("SaveFilesStore: %v", err)
+	}
+	if _, ok := gotBody["counts"]; ok {
+		t.Fatalf("counts key must be omitted when nil, got %s", gotBody["counts"])
+	}
 }
