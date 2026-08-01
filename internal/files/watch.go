@@ -76,6 +76,8 @@ func (d *debouncer) stop() {
 // appears.
 type fsWatcher struct {
 	root   string
+	ignore *Matcher
+	hidden bool
 	inner  *fsnotify.Watcher
 	events chan string
 	errs   chan error
@@ -89,32 +91,78 @@ func newFSWatcher(root string, ignore *Matcher, hidden bool) (watcher, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &fsWatcher{root: root, inner: inner,
+	w := &fsWatcher{root: root, ignore: ignore, hidden: hidden, inner: inner,
 		events: make(chan string, 8), errs: make(chan error, 1), done: make(chan struct{})}
 	if err := w.addTree(root); err != nil {
 		inner.Close()
 		return nil, err
 	}
-	go w.loop(ignore, hidden)
+	go w.loop()
 	return w, nil
 }
 
-// addTree walks dir and registers a watch on every subdirectory (fsnotify is
-// non-recursive). A missing dir is not fatal — the service's sanity-guard handles
-// a vanished root.
+// rel returns the root-relative slash path of p under w.root, matching how the
+// ignore Matcher is used elsewhere (see sync.go). ok is false when p cannot be
+// made relative — callers then fail open (emit) rather than silently drop.
+func (w *fsWatcher) rel(p string) (string, bool) {
+	r, err := filepath.Rel(w.root, p)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(r), true
+}
+
+// hiddenPath reports whether any segment of a root-relative slash path begins
+// with a dot. The root itself ("" / ".") is never hidden.
+func hiddenPath(rel string) bool {
+	if rel == "" || rel == "." {
+		return false
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// skip reports whether a root-relative path is filtered out by the hidden or
+// ignore rules. The root is never skipped.
+func (w *fsWatcher) skip(rel string) bool {
+	if rel == "" || rel == "." {
+		return false
+	}
+	if !w.hidden && hiddenPath(rel) {
+		return true
+	}
+	if w.ignore != nil && w.ignore.Match(rel) {
+		return true
+	}
+	return false
+}
+
+// addTree walks dir and registers a watch on every non-ignored, non-hidden
+// subdirectory (fsnotify is non-recursive). Ignored/hidden subtrees are pruned
+// (SkipDir) so they do not consume OS watch descriptors. A missing dir is not
+// fatal — the service's sanity-guard handles a vanished root.
 func (w *fsWatcher) addTree(dir string) error {
 	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() {
-			_ = w.inner.Add(p)
+		if !d.IsDir() {
+			return nil
 		}
+		rel, ok := w.rel(p)
+		if ok && w.skip(rel) {
+			return filepath.SkipDir
+		}
+		_ = w.inner.Add(p)
 		return nil
 	})
 }
 
-func (w *fsWatcher) loop(ignore *Matcher, hidden bool) {
+func (w *fsWatcher) loop() {
 	for {
 		select {
 		case <-w.done:
@@ -123,11 +171,8 @@ func (w *fsWatcher) loop(ignore *Matcher, hidden bool) {
 			if !ok {
 				return
 			}
-			base := filepath.Base(ev.Name)
-			if !hidden && strings.HasPrefix(base, ".") {
-				continue
-			}
-			if ignore != nil && ignore.Match(base) {
+			rel, ok := w.rel(ev.Name)
+			if ok && w.skip(rel) {
 				continue
 			}
 			// A newly created directory needs its own watch.

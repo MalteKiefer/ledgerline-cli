@@ -49,6 +49,56 @@ func TestFSWatcherEmitsOnLocalWrite(t *testing.T) {
 	}
 }
 
+func TestFSWatcherSkipsIgnoredNestedDir(t *testing.T) {
+	dir := t.TempDir()
+	skip := filepath.Join(dir, "skip")
+	if err := os.MkdirAll(skip, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w, err := newFSWatcher(dir, NewMatcher([]string{"skip/"}), false)
+	if err != nil {
+		t.Fatalf("newFSWatcher: %v", err)
+	}
+	defer w.Close()
+
+	if err := os.WriteFile(filepath.Join(skip, "f.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-w.Events():
+		t.Fatalf("unexpected event for ignored dir: %q", got)
+	case err := <-w.Errors():
+		t.Fatalf("watcher error: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		// No event — correct.
+	}
+}
+
+func TestFSWatcherSkipsHiddenNestedDir(t *testing.T) {
+	dir := t.TempDir()
+	hiddenDir := filepath.Join(dir, ".git")
+	if err := os.MkdirAll(hiddenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w, err := newFSWatcher(dir, NewMatcher(nil), false)
+	if err != nil {
+		t.Fatalf("newFSWatcher: %v", err)
+	}
+	defer w.Close()
+
+	if err := os.WriteFile(filepath.Join(hiddenDir, "HEAD"), []byte("ref"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-w.Events():
+		t.Fatalf("unexpected event for hidden dir: %q", got)
+	case err := <-w.Errors():
+		t.Fatalf("watcher error: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		// No event — correct.
+	}
+}
+
 func drain(ch <-chan string) map[string]bool {
 	out := map[string]bool{}
 	for {
