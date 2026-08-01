@@ -65,3 +65,39 @@ func TestServiceRunsPassOnEvent(t *testing.T) {
 		t.Fatalf("Run returned %v", err)
 	}
 }
+
+func TestServicePausesWhenLocalRootVanishes(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	client, vk := newTestClient(t)
+	store := NewStore(client, vk)
+	if err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	local := t.TempDir()
+	if err := os.WriteFile(filepath.Join(local, "a.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := ServiceMapping{Local: local, Remote: "",
+		Opts: SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth}}
+	svc := &Service{Client: client, Store: store, VK: vk, Log: func(string) {}}
+
+	// First pass uploads a.txt and records state.
+	if fatal := svc.runPass(context.Background(), m); fatal != nil {
+		t.Fatalf("pass1: %v", fatal)
+	}
+	if !remoteHasFile(t, client, vk, "a.txt") {
+		t.Fatal("a.txt not uploaded on first pass")
+	}
+
+	// Local root emptied (simulates an unmounted drive). Guard must NOT trash remote.
+	os.RemoveAll(local)
+	if fatal := svc.runPass(context.Background(), m); fatal != nil {
+		t.Fatalf("pass2: %v", fatal)
+	}
+	if !remoteHasFile(t, client, vk, "a.txt") {
+		t.Fatal("guard failed: remote a.txt was deleted after local root vanished")
+	}
+	if !svc.paused[local] {
+		t.Fatal("mapping should be marked paused")
+	}
+}
