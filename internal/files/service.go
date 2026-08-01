@@ -2,7 +2,9 @@ package files
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -10,6 +12,10 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
 )
+
+// errWiped is returned by Run when the heartbeat callback reports that this
+// client has been remotely wiped, so the supervisor should stop immediately.
+var errWiped = errors.New("client wiped remotely")
 
 // ServiceMapping is one local↔remote directory pairing the service keeps in
 // sync, watched for local changes and polled on Interval for remote ones.
@@ -53,6 +59,15 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.NewWatcher == nil {
 		s.NewWatcher = newFSWatcher
 	}
+	s.Audit.Log(audit.Event{Event: "files.service_start", Outcome: audit.OutcomeStart, Target: "files", Count: len(s.Mappings)})
+	defer s.Audit.Log(audit.Event{Event: "files.service_stop", Outcome: audit.OutcomeOK, Target: "files"})
+	if s.Heartbeat != nil {
+		if wipe := s.Heartbeat("syncing", "files"); wipe {
+			return errWiped
+		}
+		defer s.Heartbeat("idle", "")
+	}
+
 	deb := newDebouncer(s.Debounce)
 	defer deb.stop()
 
@@ -173,12 +188,33 @@ func (s *Service) runPass(ctx context.Context, m ServiceMapping) (fatal error) {
 	}
 	res, err := NewSyncer(s.Client, s.Store, s.VK, m.Local, m.Remote, m.Opts).Run(ctx)
 	if err != nil {
-		s.logf("sync %s: %v", m.Local, err)
+		if isAuthFatal(err) {
+			return err // supervisor exits; caller tells the user to log in again
+		}
+		if errors.Is(err, ErrDegraded) {
+			if !s.paused[m.Local] {
+				s.paused[m.Local] = true
+				s.logf("PAUSED %s: store degraded (missing shard) — read-only", m.Local)
+			}
+			return nil
+		}
+		s.logf("sync %s: %v (will retry)", m.Local, err)
+		s.Audit.Log(audit.Event{Event: "files.sync_pass", Outcome: audit.OutcomeError, Target: "files"})
 		return nil
 	}
 	s.logf("sync %s: ↑%d ↓%d ✗%d !%d", m.Local,
 		res.Uploaded, res.Downloaded, res.TrashedRemote+res.DeletedLocal, res.Conflicts)
+	s.Audit.Log(audit.Event{Event: "files.sync_pass", Outcome: audit.OutcomeOK, Target: "files",
+		Count: res.Uploaded + res.Downloaded})
 	return nil
+}
+
+// isAuthFatal reports whether err represents an unauthorized (401) response
+// from the server — the supervisor treats this as unrecoverable (the token is
+// dead or the client was logged out/wiped) and stops the whole service rather
+// than retrying forever.
+func isAuthFatal(err error) bool {
+	return api.Status(err) == http.StatusUnauthorized
 }
 
 // rootUnsafe reports whether a pass would be a mass-delete: the local root is

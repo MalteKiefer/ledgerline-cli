@@ -2,10 +2,13 @@ package files
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/MalteKiefer/ledgerline-cli/internal/vault"
 )
 
 type fakeWatcher struct {
@@ -63,6 +66,59 @@ func TestServiceRunsPassOnEvent(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil && err != context.Canceled {
 		t.Fatalf("Run returned %v", err)
+	}
+}
+
+func TestServiceStopsOnAuthFatal(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	client, vk := newTestClientReturning401(t)
+	store := NewStore(client, vk)
+	_ = store.Load(context.Background())
+	local := t.TempDir()
+	os.WriteFile(filepath.Join(local, "a.txt"), []byte("x"), 0o600)
+
+	svc := &Service{Client: client, Store: store, VK: vk, Log: func(string) {}}
+	err := svc.runPass(context.Background(), ServiceMapping{Local: local,
+		Opts: SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth}})
+	if err == nil {
+		t.Fatal("want fatal auth error to stop the service, got nil")
+	}
+}
+
+func TestServiceTransientErrorDoesNotStopService(t *testing.T) {
+	t.Setenv("LEDGERLINE_CLI_CONFIG_DIR", t.TempDir())
+	mk := newMock(t, "pass")
+	client := mk.client(t)
+	vk, err := vault.Unlock(context.Background(), client, "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(client, vk)
+	if err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	local := t.TempDir()
+	os.WriteFile(filepath.Join(local, "a.txt"), []byte("x"), 0o600)
+
+	m := ServiceMapping{Local: local, Remote: "",
+		Opts: SyncOptions{Conflict: ConflictNewest, Delete: DeleteBoth}}
+	svc := &Service{Client: client, Store: store, VK: vk, Log: func(string) {}}
+
+	// First pass succeeds and uploads a.txt, establishing sync state.
+	if fatal := svc.runPass(context.Background(), m); fatal != nil {
+		t.Fatalf("pass1: %v", fatal)
+	}
+
+	// Simulate a transient server failure on the next store round-trip.
+	mk.mu.Lock()
+	mk.failStorePut = http.StatusInternalServerError
+	mk.mu.Unlock()
+	os.WriteFile(filepath.Join(local, "b.txt"), []byte("y"), 0o600)
+	if fatal := svc.runPass(context.Background(), m); fatal != nil {
+		t.Fatalf("transient error must not be fatal, got %v", fatal)
+	}
+	if svc.paused[local] {
+		t.Fatal("transient error must not pause the mapping")
 	}
 }
 
