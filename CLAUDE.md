@@ -27,10 +27,26 @@ decision wins and the disagreement is logged here (§13), not silently resolved.
 
 ## 2. Shared-contract status  [LIVING]
 
-- **Aligned to:** web repo `ledgerline` @ branch `develop`, Store v3 through
-  commit `6f3c8f2e` (2026-07-22). Verified 2026-07-22: §17 fixtures byte-identical
-  to the web copies; openapi endpoint shapes match. Web crypto commits since the
-  initial align, assessed:
+- **Aligned to:** web repo `ledgerline` Store v3, re-verified 2026-08-01 against
+  web HEAD `b88ba9d0`. The web repo briefly detoured to plaintext-relational then
+  ROLLED BACK to zero-knowledge (`779978ea`, 2026-07-31) and stacked a
+  store-merge-safety contract + additive endpoints on top; those are re-audited
+  in this section. Prior baseline was `6f3c8f2e` (2026-07-22, §17 fixtures
+  byte-identical). Post-rollback contract audit (2026-08-01):
+  - **Client store-merge-safety contract** (web `ca72a61c`/`376575aa`/`4e642cf9`):
+    on a 409 the client must rebase-merge (fetch winner, replay its own delta,
+    never re-PUT a stale whole copy). CLI already reloads the winner and replays
+    session adds (gallery) / staged ops (files) — the no-wholesale-clobber
+    property holds. The `shards[]` complete-ref guard is sent on both sharded
+    PUTs. The optional `counts` anomaly-scan map is now sent COMPLETE-or-omitted
+    (§13). `seq`-collision / invoice-random-id / numeric-vector-LWW rules are N/A
+    (CLI writes no invoices, merges no embeddings, canonical-JSON rejects floats).
+    Recursive nested deep-merge is deliberately NOT built (§12 — no CLI surface).
+  - **Crypto-revocation / identity write-once** (web `2044c7df`): N/A — the CLI
+    never publishes an identity keypair, never KEM-wraps in the live path
+    (personal stores are symmetric under VK), and the vault is READ-ONLY
+    (`GET /api/v1/vault` only; no provision/rotate). No client action needed.
+  - Web crypto commits from the initial align, still assessed:
   - `6c4b4eb7` ML-KEM identity secret = 64-byte FIPS-203 seed — CLI already
     matches (`Identity.MLKEMSeed()` = `dk.Bytes()`; `NewIdentityFromSecrets` uses
     `NewDecapsulationKey768(seed)`). No change.
@@ -53,12 +69,19 @@ decision wins and the disagreement is logged here (§13), not silently resolved.
   KEM, `internal/shard` content-addressed id-bucketing (§5.1), the partial-record
   shape (§8.1). Any change to these is "contract impact: yes — spec update
   required" and must be reported.
-- **Consumed API surface (openapi.yaml, verified 2026-07-22):**
+- **Consumed API surface (openapi.yaml, verified 2026-08-01):**
   `GET/PUT /store/{module}` (todos), `GET/PUT /gallery/store` + `/gallery/upload`
-  + `/gallery/raw/{blob}` + `/gallery/process`, `GET/PUT /files/store` +
-  `/files/upload` + `/files/raw/{blob}` + `/files/blob/{blob}`. Upload → `{id}`
+  + `/gallery/raw/{blob}` + `POST /gallery/raw-batch` + `/gallery/process`,
+  `GET/PUT /files/store` + `/files/upload` + `/files/raw/{blob}` +
+  `POST /files/raw-batch` + `DELETE /files/blob/{blob}` (blob delete — NOT a GET;
+  a prior note here mis-stated the method). Upload → `{id}`
   (IdResponse); store GET/PUT → `{ciphertext,version}` / `{version}`; 409 =
-  version_conflict. Monolith `/store` is removed. Gallery/files store PUT bodies
+  version_conflict. Monolith `/store` is removed. Additive endpoints the spec now
+  exposes but the CLI deliberately does NOT consume: `/{store}/history[/{ver}]`
+  (sealed-root recovery), `/blobs/reconcile` (§12/§13), `/{store}/usage`, chunked
+  upload (`/upload/init|part|complete|abort`), public `/shares`, and the gallery
+  ML/geo endpoints (`/analyze`,`/embed-text`,`/reverse`,`/geocode`). Store GET
+  also supports ETag/304, not used (§12). Gallery/files store PUT bodies
   also carry an OPTIONAL `counts` map (`{"photos","albums","people"}` /
   `{"files","fileFolders"}`) feeding the server's anomaly-scan (silent data-loss
   detection) — COMPLETE-or-omitted only (§13 safety rule; never partial).
@@ -241,6 +264,17 @@ capability-floor scope decision:
     the network win with no plaintext at rest. Marginal; not built.
   - Statistical timing-distribution test for the failure floor — flaky; the
     deterministic floor + uniform-error behaviour is tested (§28).
+  - Recursive nested manifest deep-merge on 409 (web store-merge-safety-spec
+    `376575aa`: deep-merge a record both sides changed, field-by-field) — NOT
+    built (2026-08-01). It has no CLI surface: the files store's only update patch
+    (`UpdateFile`, `upload.go`) carries flat top-level keys, `patchRecord` already
+    merges them onto the reloaded winner (other fields preserved), and the sync
+    engine resolves same-file conflicts at reconcile time via
+    `--conflict newest|keep-both|skip` BEFORE staging an op. Gallery is
+    append-only (new-id records only) so it never edits a shared record. Building
+    web-style recursive merge would be speculative dead code on the
+    contract-critical sealed-store path. Revisit only if the CLI ever writes
+    partial patches to nested record fields.
 
 Everything else the operating manual's Definition of Done calls for is DONE and
 recorded in the Changelog (§15) — Argon2 host-guard, uniform decryption failure,
@@ -302,6 +336,13 @@ JSON audit trail.
 
 ## 15. Changelog
 
+- 2026-08-01 docs(claude): re-align §2 to web HEAD `b88ba9d0` after the web
+  ZK-rollback (`779978ea`) — audit the new client store-merge-safety contract
+  (rebase-merge / `shards[]` / `counts` all met; seq/invoice/vector rules N/A;
+  identity-write-once + KEM-revocation N/A, CLI vault is read-only), fix the
+  consumed-surface note (`/files/blob` is DELETE, not GET) + list additive
+  endpoints the CLI does not consume; record recursive nested deep-merge as a
+  deliberate non-implementation (§12, no CLI surface).
 - 2026-08-01 feat(store): send per-slice counts on gallery+files PUT for
   anomaly-scan (complete-or-omit). `internal/api` `SaveGalleryStore`/
   `SaveFilesStore` gained a `counts map[string]int` param sent as the body's
