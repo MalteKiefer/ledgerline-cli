@@ -478,6 +478,40 @@ func TestSyncRoundTripAndDelete(t *testing.T) {
 	}
 }
 
+// newTestClient spins up a mock server + unlocks its vault, returning a ready
+// client and vault key for service/sync tests that don't need direct access
+// to the mock itself.
+func newTestClient(t *testing.T) (*api.Client, []byte) {
+	t.Helper()
+	m := newMock(t, "pass")
+	client := m.client(t)
+	vk, err := vault.Unlock(context.Background(), client, "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, vk
+}
+
+// remoteHasFile reloads a fresh store from the server and reports whether a
+// file with the given name is present (and not trashed).
+func remoteHasFile(t *testing.T, client *api.Client, vk []byte, name string) bool {
+	t.Helper()
+	store := NewStore(client, vk)
+	if err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range store.Files() {
+		view, err := parseFile(raw)
+		if err != nil {
+			continue
+		}
+		if view.Name == name && view.Trashed == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // runSync loads a fresh store and runs one sync pass for a local dir (root map).
 func runSync(t *testing.T, ctx context.Context, client *api.Client, vk []byte, dir string, opts SyncOptions) SyncResult {
 	t.Helper()
