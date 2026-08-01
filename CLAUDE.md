@@ -88,7 +88,7 @@ internal/blobcache/     on-disk CIPHERTEXT shard cache (ref-addressed, 0600)
 internal/audit/         local JSONL operation audit trail (0600, rotated, no secrets)
 internal/conformance/   §17 cross-client fixtures + KATs (release gate)
 internal/gallery/        v3 sharded gallery store + upload pipeline            [sharded engine]
-internal/files/          v3 sharded files store (same engine shape) + tree/sync
+internal/files/          v3 sharded files store (same engine shape) + tree/sync + continuous sync service (service.go, watch.go)
 internal/manifeststore/  per-module sealed-row engine (todos)
 internal/todo/ ml/ vault/ session/ settings/ certpin/ config/ version/ ui/
 ```
@@ -111,6 +111,7 @@ Direct:
   equivalent for Argon2id or secretstream. (curve25519/hkdf subpackages are NO
   longer used — migrated to stdlib crypto/ecdh + crypto/hkdf, 2026-07-22.)
 - `golang.org/x/term v0.45.0` — no-echo passphrase reads + TTY detection.
+- `github.com/fsnotify/fsnotify v1.9.0` — **justified**: no stdlib OS file-event API; cross-platform recursive filesystem watch (inotify/kqueue/ReadDirectoryChangesW) for `files sync --service`. Pinned + checksum-verified (GOFLAGS=-mod=readonly in CI).
 
 Indirect: wincred, godbus/dbus/v5, mousetrap, spf13/pflag, x/sys.
 
@@ -285,6 +286,7 @@ JSON audit trail.
 
 ## 15. Changelog
 
+- 2026-08-01 feat(files): files sync --service — continuous watch+interval sync client (fsnotify), per-mapping policy in settings.json, unattended sanity-guard (pause vs mass-delete), single-instance lock, graceful SIGINT/SIGTERM shutdown, auth-expiry stop.
 - 2026-07-24 `e709de6` feat(audit): local JSONL operation audit trail
   (`internal/audit`, uniform command hook + domain events; 0600, rotated, no
   secrets); `audit show|path|purge`.

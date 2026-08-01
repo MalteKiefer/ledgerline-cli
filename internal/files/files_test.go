@@ -34,6 +34,16 @@ type mock struct {
 	deleted    []string
 	lastShards []string // shards[] from the most recent store PUT (integrity guard)
 	seq        int
+
+	// failStorePut, when non-zero, makes the /files/store handler (both GET
+	// and PUT) reply with this HTTP status instead of serving the store —
+	// used to simulate auth-fatal (401) and transient (5xx) server failures.
+	failStorePut int
+
+	// failUpload, when non-zero, makes the /files/upload (blob) handler reply
+	// with this HTTP status — used to simulate a token expiring mid-pass so a
+	// 401 lands on a per-file blob operation rather than the manifest store.
+	failUpload int
 }
 
 func newMock(t *testing.T, pass string) *mock {
@@ -68,6 +78,10 @@ func newMock(t *testing.T, pass string) *mock {
 	mux.HandleFunc("/api/v1/files/store", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if m.failStorePut != 0 {
+			w.WriteHeader(m.failStorePut)
+			return
+		}
 		if r.Method == http.MethodGet {
 			json.NewEncoder(w).Encode(map[string]any{"ciphertext": m.store, "version": m.version})
 			return
@@ -88,6 +102,13 @@ func newMock(t *testing.T, pass string) *mock {
 		json.NewEncoder(w).Encode(map[string]any{"version": m.version})
 	})
 	mux.HandleFunc("/api/v1/files/upload", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		fail := m.failUpload
+		m.mu.Unlock()
+		if fail != 0 {
+			w.WriteHeader(fail)
+			return
+		}
 		f, _, err := r.FormFile("file")
 		if err != nil {
 			w.WriteHeader(400)
@@ -476,6 +497,58 @@ func TestSyncRoundTripAndDelete(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dirB, "docs", "a.txt")); !os.IsNotExist(err) {
 		t.Fatal("deletion did not propagate to B")
 	}
+}
+
+// newTestClient spins up a mock server + unlocks its vault, returning a ready
+// client and vault key for service/sync tests that don't need direct access
+// to the mock itself.
+func newTestClient(t *testing.T) (*api.Client, []byte) {
+	t.Helper()
+	m := newMock(t, "pass")
+	client := m.client(t)
+	vk, err := vault.Unlock(context.Background(), client, "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, vk
+}
+
+// newTestClientReturning401 returns a client backed by a mock server whose
+// /files/store endpoint (both GET and PUT) always answers 401 — used to
+// exercise the auth-fatal path in the sync-service supervisor. Login itself
+// (/vault) is unaffected, since only the store endpoint is short-circuited.
+func newTestClientReturning401(t *testing.T) (*api.Client, []byte) {
+	t.Helper()
+	m := newMock(t, "pass")
+	client := m.client(t)
+	vk, err := vault.Unlock(context.Background(), client, "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.failStorePut = http.StatusUnauthorized
+	m.mu.Unlock()
+	return client, vk
+}
+
+// remoteHasFile reloads a fresh store from the server and reports whether a
+// file with the given name is present (and not trashed).
+func remoteHasFile(t *testing.T, client *api.Client, vk []byte, name string) bool {
+	t.Helper()
+	store := NewStore(client, vk)
+	if err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range store.Files() {
+		view, err := parseFile(raw)
+		if err != nil {
+			continue
+		}
+		if view.Name == name && view.Trashed == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // runSync loads a fresh store and runs one sync pass for a local dir (root map).
