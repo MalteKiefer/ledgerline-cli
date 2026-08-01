@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -25,6 +29,7 @@ func newFilesSyncCommand() *cobra.Command {
 		override bool
 		ignore   []string
 		dryRun   bool
+		service  bool
 	)
 
 	cmd := &cobra.Command{
@@ -52,6 +57,7 @@ func newFilesSyncCommand() *cobra.Command {
 				override: override,
 				ignore:   ignore,
 				dryRun:   dryRun,
+				service:  service,
 			})
 		},
 	}
@@ -64,6 +70,7 @@ func newFilesSyncCommand() *cobra.Command {
 	f.BoolVar(&override, "override", false, "on any difference, overwrite the remote copy with the local one")
 	f.StringArrayVar(&ignore, "ignore", nil, "extra ignore pattern (repeatable); adds to the settings ignore list")
 	f.BoolVar(&dryRun, "dry-run", false, "show what would change without modifying anything")
+	f.BoolVar(&service, "service", false, "run continuously: watch + interval sync until interrupted")
 	return cmd
 }
 
@@ -76,16 +83,23 @@ type syncFlags struct {
 	override bool
 	ignore   []string
 	dryRun   bool
+	service  bool
 }
 
-// runFilesSync resolves mappings and runs a bidirectional pass for each.
+// runFilesSync resolves mappings and runs a bidirectional pass for each. With
+// --service it instead hands off to runFilesSyncService, which runs
+// continuously (watch + interval) until interrupted.
 func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
-	ctx := cmd.Context()
-	w := cmd.OutOrStdout()
-
 	if err := validateSyncPolicies(fl); err != nil {
 		return err
 	}
+
+	if fl.service {
+		return runFilesSyncService(cmd, fl)
+	}
+
+	ctx := cmd.Context()
+	w := cmd.OutOrStdout()
 
 	cfg, err := settings.Load()
 	if err != nil {
@@ -95,6 +109,7 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 	if err != nil {
 		return err
 	}
+	warnServiceRunning(w)
 
 	// A live bar (only on a terminal) shows position and running tallies so a
 	// slow pass — content comparisons download blobs — never looks frozen. It is
@@ -190,6 +205,150 @@ func runFilesSync(cmd *cobra.Command, fl syncFlags) error {
 		}
 	}
 	return nil
+}
+
+// runFilesSyncService runs `files sync --service`: with --map it first
+// persists the mapping(s) into settings.json (so a later plain `--service`
+// run without --map picks them back up), then resolves the full mapping list
+// from settings and runs files.Service until interrupted (SIGINT/SIGTERM).
+// It always prompts for the passphrase (unlockVaultPrompt, not unlockVault) so
+// a long-running daemon derives its own VK rather than depending on a cache
+// entry that could go stale or be cleared out from under it.
+func runFilesSyncService(cmd *cobra.Command, fl syncFlags) error {
+	ctx := cmd.Context()
+	w := cmd.OutOrStdout()
+
+	cfg, err := settings.Load()
+	if err != nil {
+		return err
+	}
+
+	if len(fl.maps) > 0 {
+		for _, a := range fl.maps {
+			parsed, err := parseMapping(a)
+			if err != nil {
+				return err
+			}
+			cfg.Upsert(mappingFromFlags(cmd, fl, parsed))
+		}
+		if err := settings.Save(cfg); err != nil {
+			return err
+		}
+	}
+
+	mappings, err := resolveMappings(nil, cfg)
+	if err != nil {
+		return err
+	}
+
+	release, err := acquireLock("service")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	client, err := authedClient(ctx)
+	if err != nil {
+		return err
+	}
+	vk, err := unlockVaultPrompt(cmd, client)
+	if err != nil {
+		return err
+	}
+
+	store := files.NewStore(client, vk)
+	store.SetShardCache(shardCache("files-shards"))
+	fmt.Fprintln(w, "Loading files…")
+	if err := store.Load(ctx); err != nil {
+		return err
+	}
+	warnIfDegraded(w, "files", store)
+
+	globalInterval := settings.ParseDurationOr(cfg.Service.Interval, 60*time.Second)
+	debounce := settings.ParseDurationOr(cfg.Service.Debounce, 2*time.Second)
+
+	sms := make([]files.ServiceMapping, 0, len(mappings))
+	for _, m := range mappings {
+		hidden := fl.hidden || cfg.Hidden
+		if m.Hidden != nil {
+			hidden = *m.Hidden
+		}
+		conflict := fl.conflict
+		if m.Conflict != "" {
+			conflict = m.Conflict
+		}
+		del := fl.delete
+		if m.Delete != "" {
+			del = m.Delete
+		}
+		patterns := append(append([]string{}, cfg.Ignore...), fl.ignore...)
+		patterns = append(patterns, m.Ignore...)
+		sms = append(sms, files.ServiceMapping{
+			Remote: m.Remote,
+			Local:  m.Local,
+			Opts: files.SyncOptions{
+				Conflict: conflict,
+				Delete:   del,
+				Hidden:   hidden,
+				Override: false,
+				Ignore:   files.NewMatcher(patterns),
+			},
+			Interval: settings.ParseDurationOr(m.Interval, globalInterval),
+		})
+	}
+
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	svc := &files.Service{
+		Client:   client,
+		Store:    store,
+		VK:       vk,
+		Mappings: sms,
+		Debounce: debounce,
+		Log:      func(s string) { fmt.Fprintln(w, s) },
+		Audit:    auditLog(),
+		Heartbeat: func(state, detail string) bool {
+			return reportSync(ctx, client, state, detail)
+		},
+	}
+	fmt.Fprintf(w, "Service running (%d mappings). Ctrl-C to stop.\n", len(sms))
+	return svc.Run(sigCtx)
+}
+
+// mappingFromFlags builds the settings.Mapping to persist for a --map value
+// passed alongside --service. conflict/delete are always carried over from
+// the command's (possibly default) flag values, since every mapping needs
+// some resolution policy; hidden/ignore are carried only when the user
+// explicitly set them, so an unrelated --service run doesn't clobber a
+// previously saved per-mapping override with the flag's zero value.
+func mappingFromFlags(cmd *cobra.Command, fl syncFlags, parsed settings.Mapping) settings.Mapping {
+	m := parsed
+	m.Conflict = fl.conflict
+	m.Delete = fl.delete
+	if cmd.Flags().Changed("hidden") {
+		h := fl.hidden
+		m.Hidden = &h
+	}
+	if cmd.Flags().Changed("ignore") {
+		m.Ignore = fl.ignore
+	}
+	return m
+}
+
+// warnServiceRunning best-effort checks whether a files sync --service
+// instance already holds the lock and, if so, prints a note — but never
+// refuses the one-shot pass. A concurrent service and manual one-shot sync
+// against the same store are safe (the store is single-writer per process,
+// and each pass just contends briefly), just potentially noisy.
+func warnServiceRunning(w io.Writer) {
+	path, err := lockFilePath("service")
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintln(w, "Note: a files sync --service instance appears to be running; proceeding with a one-shot sync anyway.")
+	}
 }
 
 // validateSyncPolicies checks the conflict/delete flag values.
