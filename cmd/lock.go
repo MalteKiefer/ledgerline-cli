@@ -22,7 +22,11 @@ func acquireLock(name string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) && staleLock(path) {
-			_ = os.Remove(path)
+			// Reclaim a stale lock, but only recurse after a *successful* remove:
+			// if Remove keeps failing, recursing would spin forever.
+			if rmErr := os.Remove(path); rmErr != nil {
+				return nil, fmt.Errorf("removing stale lock %s: %w", path, rmErr)
+			}
 			return acquireLock(name)
 		}
 		return nil, fmt.Errorf("another instance holds %s (%s)", name, path)

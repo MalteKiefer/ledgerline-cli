@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -229,7 +230,17 @@ func runFilesSyncService(cmd *cobra.Command, fl syncFlags) error {
 			if err != nil {
 				return err
 			}
-			cfg.Upsert(mappingFromFlags(cmd, fl, parsed))
+			// Seed from any existing saved mapping for this local path so that
+			// re-registering it without repeating a policy flag preserves the
+			// previously saved per-mapping override (Upsert replaces wholesale,
+			// so an empty policy field would otherwise clobber the saved one).
+			base := parsed
+			if existing, ok := findMapping(cfg, parsed.Local); ok {
+				base = existing
+				base.Remote = parsed.Remote
+				base.Local = parsed.Local
+			}
+			cfg.Upsert(mappingFromFlags(cmd, fl, base))
 		}
 		if err := settings.Save(cfg); err != nil {
 			return err
@@ -316,16 +327,34 @@ func runFilesSyncService(cmd *cobra.Command, fl syncFlags) error {
 	return svc.Run(sigCtx)
 }
 
+// findMapping returns the saved mapping whose local path matches (after
+// filepath.Clean), mirroring how settings.Upsert keys mappings.
+func findMapping(cfg settings.Settings, local string) (settings.Mapping, bool) {
+	key := filepath.Clean(local)
+	for _, m := range cfg.Sync {
+		if filepath.Clean(m.Local) == key {
+			return m, true
+		}
+	}
+	return settings.Mapping{}, false
+}
+
 // mappingFromFlags builds the settings.Mapping to persist for a --map value
-// passed alongside --service. conflict/delete are always carried over from
-// the command's (possibly default) flag values, since every mapping needs
-// some resolution policy; hidden/ignore are carried only when the user
-// explicitly set them, so an unrelated --service run doesn't clobber a
-// previously saved per-mapping override with the flag's zero value.
-func mappingFromFlags(cmd *cobra.Command, fl syncFlags, parsed settings.Mapping) settings.Mapping {
-	m := parsed
-	m.Conflict = fl.conflict
-	m.Delete = fl.delete
+// passed alongside --service, starting from base (the parsed --map arg, or the
+// existing saved mapping when one exists for this local path). Every policy
+// field (conflict/delete/hidden/ignore) is overwritten ONLY when the user
+// explicitly set the corresponding flag, so re-registering an existing mapping
+// without repeating a flag leaves its saved per-mapping override intact rather
+// than resetting it to the command default. An unset Conflict/Delete resolves
+// back to the default at run time (the resolution code treats "" as "fall back").
+func mappingFromFlags(cmd *cobra.Command, fl syncFlags, base settings.Mapping) settings.Mapping {
+	m := base
+	if cmd.Flags().Changed("conflict") {
+		m.Conflict = fl.conflict
+	}
+	if cmd.Flags().Changed("delete") {
+		m.Delete = fl.delete
+	}
 	if cmd.Flags().Changed("hidden") {
 		h := fl.hidden
 		m.Hidden = &h
