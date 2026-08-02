@@ -71,6 +71,12 @@ type Item struct {
 	MotionPath   string        // paired .MOV/.MP4, or empty
 	SidecarTaken time.Time     // fallback capture time (zero if none)
 	Imported     *ImportedMeta // authoritative source metadata (Immich), or nil
+	// RenditionPath is a decodable JPEG rendition of the original (Immich's own
+	// preview) used as the thumbnail/medium and the local-ML input, so a
+	// HEIC/RAW/video import is thumbnailed and analysed WITHOUT the Ledgerline
+	// /process transform (no plaintext egress, no server-side format handling).
+	// Empty for folder/zip sources, which fall back to /process.
+	RenditionPath string
 }
 
 // Outcome describes what happened to one item.
@@ -141,6 +147,38 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 				rec.MotionRef, rec.MotionKey = ref, key
 			}
 		}
+	}
+
+	// 3a. Immich import with a client-supplied rendition: derive from Immich's own
+	// preview JPEG (thumbnail/medium + local-ML input) instead of the Ledgerline
+	// /process transform. No plaintext egress, and a HEIC/RAW/video original is
+	// thumbnailed and analysed via a decodable JPEG the server never has to handle.
+	if item.RenditionPath != "" {
+		d := api.ProcessResult{}
+		if prev, rerr := readFileCapped(item.RenditionPath); rerr == nil && len(prev) > 0 {
+			b64 := base64.StdEncoding.EncodeToString(prev)
+			d.Medium, d.Thumb = b64, b64
+		}
+		mlResolved := false
+		if u.analyzer != nil && d.Medium != "" {
+			if err := u.runLocalML(ctx, &d); err != nil {
+				return 0, nil, fmt.Errorf("local ML: %w", err)
+			}
+			mlResolved = true
+		}
+		// No /process ran, so nothing reverse-geocoded here (geoAttempted=false);
+		// applyDerived folds item.Imported (GPS/camera/taken) in.
+		if err := u.applyDerived(ctx, rec, d, item, mlResolved, false); err != nil {
+			return 0, nil, err
+		}
+		if d.Thumb == "" {
+			rec.ThumbPending = true
+		}
+		if err := u.store.Add(rec); err != nil {
+			return 0, nil, err
+		}
+		committed = true
+		return Uploaded, rec, nil
 	}
 
 	// 3. Derivation is OPT-IN (§8.1/§8.2). By default the CLI writes a partial

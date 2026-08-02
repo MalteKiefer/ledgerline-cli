@@ -263,7 +263,23 @@ func (c *ImmichClient) SearchPage(ctx context.Context, page, size int, opts Sear
 // 0600, truncated), size-bounded against a hostile server. A partial file from a
 // mid-stream failure is removed so a truncated original is never left behind.
 func (c *ImmichClient) DownloadOriginal(ctx context.Context, assetID, destPath string) error {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/assets/"+url.PathEscape(assetID)+"/original", nil, false)
+	return c.downloadTo(ctx, "/api/assets/"+url.PathEscape(assetID)+"/original", assetID, destPath)
+}
+
+// DownloadPreview streams Immich's own decodable JPEG preview rendition
+// (GET /api/assets/{id}/thumbnail?size=preview) to destPath. The importer uses it
+// as the thumbnail/medium and the local-ML input, so a HEIC/RAW/video original is
+// analysed and thumbnailed WITHOUT round-tripping plaintext through the Ledgerline
+// server's /process transform (which the Go client cannot decode and some servers
+// reject).
+func (c *ImmichClient) DownloadPreview(ctx context.Context, assetID, destPath string) error {
+	return c.downloadTo(ctx, "/api/assets/"+url.PathEscape(assetID)+"/thumbnail?size=preview", assetID, destPath)
+}
+
+// downloadTo streams a bounded GET response to destPath (0600), shared by the
+// original and preview downloads.
+func (c *ImmichClient) downloadTo(ctx context.Context, apiPath, assetID, destPath string) error {
+	req, err := c.newRequest(ctx, http.MethodGet, apiPath, nil, false)
 	if err != nil {
 		return err
 	}

@@ -304,15 +304,29 @@ func (r *importRun) one(ctx context.Context, tmpDir string, idx int, a ImmichAss
 		motionPath = mp
 	}
 
+	// Immich's own preview JPEG: the thumbnail/medium + local-ML input, so the
+	// import never routes plaintext through the Ledgerline /process transform
+	// (which cannot decode HEIC/RAW/video and some servers reject). Best-effort —
+	// a preview failure just leaves the record's thumb/ML pending for a GUI
+	// client to backfill, and the asset still imports with its injected metadata.
+	renditionPath := filepath.Join(dir, "preview.jpg")
+	if err := r.client.DownloadPreview(ctx, a.ID, renditionPath); err != nil {
+		if ctx.Err() != nil {
+			return // interrupted, not a failure
+		}
+		renditionPath = ""
+	}
+
 	sidecar := a.LocalDateTime
 	if sidecar.IsZero() {
 		sidecar = a.FileCreatedAt
 	}
 	item := Item{
-		StillPath:    stillPath,
-		MotionPath:   motionPath,
-		SidecarTaken: sidecar,
-		Imported:     mapImportedMeta(a),
+		StillPath:     stillPath,
+		MotionPath:    motionPath,
+		SidecarTaken:  sidecar,
+		Imported:      mapImportedMeta(a),
+		RenditionPath: renditionPath,
 	}
 
 	outcome, rec, uerr := r.up.Upload(ctx, item, plain)
