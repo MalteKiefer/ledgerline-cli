@@ -400,7 +400,7 @@ func immichSortTime(a ImmichAsset) time.Time {
 func mapImportedMeta(a ImmichAsset) *ImportedMeta {
 	im := &ImportedMeta{
 		Favorite:    a.IsFavorite,
-		DurationSec: parseImmichDuration(a.Duration),
+		DurationSec: parseImmichDuration(string(a.Duration)),
 	}
 	if e := a.Exif; e != nil {
 		if e.DateTimeOriginal != nil {
@@ -423,6 +423,14 @@ func parseImmichDuration(s string) *float64 {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil
+	}
+	// A bare number (no colons) is a duration already expressed in seconds.
+	if !strings.Contains(s, ":") {
+		total, err := strconv.ParseFloat(s, 64)
+		if err != nil || total <= 0 {
+			return nil
+		}
+		return &total
 	}
 	parts := strings.Split(s, ":")
 	if len(parts) != 3 {

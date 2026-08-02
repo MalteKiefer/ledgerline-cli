@@ -51,12 +51,36 @@ type ImmichAsset struct {
 	OriginalFileName string      `json:"originalFileName"`
 	Checksum         string      `json:"checksum"`
 	Type             string      `json:"type"`
-	FileCreatedAt    time.Time   `json:"fileCreatedAt"`
-	LocalDateTime    time.Time   `json:"localDateTime"`
-	Duration         string      `json:"duration"` // "HH:MM:SS.ffffff" or ""
-	LivePhotoVideoID string      `json:"livePhotoVideoId"`
-	IsFavorite       bool        `json:"isFavorite"`
-	Exif             *ImmichExif `json:"exifInfo"`
+	FileCreatedAt    time.Time      `json:"fileCreatedAt"`
+	LocalDateTime    time.Time      `json:"localDateTime"`
+	Duration         immichDuration `json:"duration"` // "HH:MM:SS.ffffff", a bare number of seconds, or null
+	LivePhotoVideoID string         `json:"livePhotoVideoId"`
+	IsFavorite       bool           `json:"isFavorite"`
+	Exif             *ImmichExif    `json:"exifInfo"`
+}
+
+// immichDuration tolerates Immich returning an asset's duration as either a
+// JSON string ("HH:MM:SS.ffffff") or a bare number of seconds — both occur
+// across Immich versions/asset types. It stores the raw scalar as a string;
+// parseImmichDuration interprets the two forms.
+type immichDuration string
+
+func (d *immichDuration) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*d = ""
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*d = immichDuration(s)
+		return nil
+	}
+	*d = immichDuration(b) // a bare number of seconds
+	return nil
 }
 
 // SearchOptions tunes a search/metadata page.
