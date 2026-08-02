@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -277,8 +279,35 @@ func (c *ImmichClient) DownloadPreview(ctx context.Context, assetID, destPath st
 }
 
 // downloadTo streams a bounded GET response to destPath (0600), shared by the
-// original and preview downloads.
+// original and preview downloads. A transient transport failure (an HTTP/2
+// stream reset, a closed keep-alive connection, a timeout) is retried with
+// backoff — large video originals over a busy link hit these intermittently and
+// a whole-asset failure would otherwise leave holes a re-run has to sweep up.
 func (c *ImmichClient) downloadTo(ctx context.Context, apiPath, assetID, destPath string) error {
+	const attempts = 4
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			if werr := immichBackoff(ctx, attempt); werr != nil {
+				return werr
+			}
+		}
+		err := c.downloadOnce(ctx, apiPath, assetID, destPath)
+		if err == nil {
+			return nil
+		}
+		// A definite HTTP status (401/403/404/…) will not change on a retry; only
+		// a transport-level error is worth repeating.
+		if ctx.Err() != nil || !isTransientNetErr(err) {
+			return err
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("asset %s: download failed after %d attempts: %w", assetID, attempts, lastErr)
+}
+
+// downloadOnce performs a single download attempt.
+func (c *ImmichClient) downloadOnce(ctx context.Context, apiPath, assetID, destPath string) error {
 	req, err := c.newRequest(ctx, http.MethodGet, apiPath, nil, false)
 	if err != nil {
 		return err
@@ -311,4 +340,49 @@ func (c *ImmichClient) downloadTo(ctx context.Context, apiPath, assetID, destPat
 		return fmt.Errorf("asset %s exceeds the %d-byte limit", assetID, int64(maxFileBytes))
 	}
 	return nil
+}
+
+// isTransientNetErr reports whether an error is a transport-level failure worth
+// retrying: a net timeout/connection error, an EOF mid-stream, or an HTTP/2
+// stream reset (which surfaces as a typed error whose message carries "stream
+// error"/"INTERNAL_ERROR" but no clean Go type to match).
+func isTransientNetErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	for _, s := range []string{"stream error", "INTERNAL_ERROR", "connection reset", "closed network connection", "unexpected EOF", "broken pipe"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// immichBackoff waits before a retry: a jitter-free exponential delay capped at
+// a few seconds, returning early if ctx ends.
+func immichBackoff(ctx context.Context, attempt int) error {
+	d := time.Duration(attempt) * 500 * time.Millisecond
+	if d > 4*time.Second {
+		d = 4 * time.Second
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

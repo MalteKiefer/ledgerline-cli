@@ -18,11 +18,39 @@ import (
 	"io"
 	"math"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
+
+// isTransientMLErr reports whether a POST /predict transport error is worth
+// retrying: a net timeout/connection error, an EOF, or a reused-then-closed
+// keep-alive connection.
+func isTransientMLErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	for _, s := range []string{"closed network connection", "connection reset", "broken pipe", "unexpected EOF", "EOF"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
 
 // predictTimeout bounds a single /predict call; model inference can be slow on
 // CPU-only instances.
@@ -163,15 +191,35 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 		return Result{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/predict", &buf)
-	if err != nil {
-		return Result{}, err
-	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
+	bodyBytes := buf.Bytes()
+	contentType := w.FormDataContentType()
 
-	resp, err := m.http.Do(req)
-	if err != nil {
-		return Result{}, fmt.Errorf("call local ML: %w", err)
+	// The ML service keeps HTTP/1.1 keep-alive connections that it may close
+	// between requests during a long import; a reused-then-closed connection
+	// surfaces as "use of closed network connection". Retry such transport
+	// failures with backoff (the request body is replayed from bodyBytes).
+	const attempts = 4
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		req, rerr := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/predict", bytes.NewReader(bodyBytes))
+		if rerr != nil {
+			return Result{}, rerr
+		}
+		req.Header.Set("Content-Type", contentType)
+
+		var derr error
+		resp, derr = m.http.Do(req)
+		if derr == nil {
+			break
+		}
+		if attempt >= attempts-1 || ctx.Err() != nil || !isTransientMLErr(derr) {
+			return Result{}, fmt.Errorf("call local ML: %w", derr)
+		}
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 500 * time.Millisecond):
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
