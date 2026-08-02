@@ -256,15 +256,40 @@ func (s *Store) indexSigs(photos []json.RawMessage) {
 	}
 }
 
-// HasSig reports whether a photo with this signature already exists (including
-// ones appended this session).
-func (s *Store) HasSig(sig string) bool {
+// ReserveSig atomically claims a signature for a would-be upload: it marks the
+// signature seen and returns true when it was previously absent, or returns false
+// (claiming nothing) when a photo with this signature already exists — loaded, or
+// added/reserved earlier this session. Doing the check-and-mark under the same
+// lock Add uses closes the check-then-add race two concurrent upload workers hit
+// on byte-identical assets in one batch (both seeing the signature absent, both
+// creating a record + ledger mark). A caller that reserves but then fails before
+// Add must ReleaseSig so the signature is not left as a false duplicate for a
+// later item.
+func (s *Store) ReserveSig(sig string) bool {
 	if sig == "" {
-		return false
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sigs[sig]
+	if s.sigs[sig] {
+		return false
+	}
+	s.sigs[sig] = true
+	return true
+}
+
+// ReleaseSig undoes a ReserveSig whose record was never Added (an upload that
+// failed after reserving), so a byte-identical later item is not wrongly skipped
+// as a duplicate. Only the worker that reserved a signature releases it (reserving
+// is single-flight), and it releases only on a pre-Add failure — a committed
+// record keeps the signature via Add.
+func (s *Store) ReleaseSig(sig string) {
+	if sig == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sigs, sig)
 }
 
 // Records returns the loaded photo records (typed) for read-only use such as

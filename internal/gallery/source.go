@@ -38,6 +38,22 @@ var videoExts = map[string]bool{
 	".vob": true, ".mxf": true, ".hevc": true, ".insv": true,
 }
 
+// ImportedMeta is capture metadata a direct import source (e.g. Immich) already
+// holds authoritatively, injected into the pipeline so a no-egress import still
+// produces a rich record without a /process round-trip. Pointer fields are nil
+// when the source did not supply the value. It feeds the cold meta blob and the
+// promoted display fields; it never alters any sealed/canonical byte layout.
+type ImportedMeta struct {
+	TakenAt     time.Time // capture time (zero = none); takes precedence over /process EXIF
+	Lat, Lon    *float64  // GPS, nil when absent
+	CameraMake  string    // camera make (may be empty)
+	CameraModel string    // camera model (may be empty)
+	Width       int       // pixel dimensions (0 when unknown)
+	Height      int
+	DurationSec *float64 // media duration in seconds (nil for stills)
+	Favorite    bool     // source-side favorite flag (recorded in the cold meta blob)
+}
+
 // isImageExt reports whether a filename has a known image extension.
 func isImageExt(name string) bool { return imageExts[strings.ToLower(filepath.Ext(name))] }
 

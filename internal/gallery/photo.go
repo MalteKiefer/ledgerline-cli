@@ -143,7 +143,11 @@ func (r *PhotoRecord) asMap() map[string]any {
 		m["faceCropRefs"] = r.FaceCropRefs
 	}
 	m["mlPending"] = r.MlPending
-	m["thumbPending"] = false
+	// thumbPending is false for a normally-processed record (a thumb was produced);
+	// a no-egress direct import (Immich, no /process) has a rich meta blob but no
+	// rendition, so it keeps thumbPending:true for a GUI client to backfill. Every
+	// existing full-record writer leaves ThumbPending false, so this is byte-safe.
+	m["thumbPending"] = r.ThumbPending
 	return m
 }
 
@@ -176,6 +180,10 @@ type metaBlob struct {
 	Height    int             `json:"height"`
 	Duration  *float64        `json:"duration"`
 	ContentID *string         `json:"content_id"`
+	// Favorite is a source-side favorite flag from a direct import (Immich). It is
+	// omitted (nil) for every non-import write, so existing cold meta blobs are
+	// byte-identical; the meta blob is never hashed, so this additive field is safe.
+	Favorite *bool `json:"favorite,omitempty"`
 }
 
 // metaFace is one face inside the metadata blob (crop stored as its own blob).

@@ -336,6 +336,18 @@ JSON audit trail.
 
 ## 15. Changelog
 
+- 2026-08-02 feat(gallery): `gallery import --immich` — direct Immich → gallery
+  import. New `internal/gallery/immich.go` (Immich REST client: `x-api-key`,
+  `search/metadata` paging, `/original` download, Live-Photo pairing via
+  `livePhotoVideoId`), `import_ledger.go` (per-server resumable dedup ledger),
+  `import.go` (batch-streaming driver: ~one batch staged on disk, bounded
+  `--jobs` pool, `--batch` checkpoint save), and a metadata-injection seam
+  (`Item.Imported`/`ImportedMeta` → cold meta blob without `/process` egress).
+  ML is recompute-only (Immich embeddings are not API-retrievable) via the
+  existing `--ml-local`/`--ml`. Contract impact: NONE — no canonical/sealed/
+  shard/blob-frame byte change; the meta blob is cold + never hashed. Built via
+  multi-agent workflow, then human-integrated; full suite + gallery/cmd
+  `-race` green. Design: `docs/superpowers/specs/2026-08-02-gallery-immich-import-design.md`.
 - 2026-08-01 docs(claude): re-align §2 to web HEAD `b88ba9d0` after the web
   ZK-rollback (`779978ea`) — audit the new client store-merge-safety contract
   (rebase-merge / `shards[]` / `counts` all met; seq/invoice/vector rules N/A;

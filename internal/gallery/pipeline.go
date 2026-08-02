@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
@@ -67,8 +68,9 @@ func (u *Uploader) SetClipModel(name string) {
 // (Live Photo) and an optional fallback capture time from a sidecar.
 type Item struct {
 	StillPath    string
-	MotionPath   string    // paired .MOV/.MP4, or empty
-	SidecarTaken time.Time // fallback capture time (zero if none)
+	MotionPath   string        // paired .MOV/.MP4, or empty
+	SidecarTaken time.Time     // fallback capture time (zero if none)
+	Imported     *ImportedMeta // authoritative source metadata (Immich), or nil
 }
 
 // Outcome describes what happened to one item.
@@ -87,9 +89,19 @@ const (
 func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome, *PhotoRecord, error) {
 	name := filepath.Base(item.StillPath)
 	sig := FileSig(plain)
-	if u.store.HasSig(sig) {
+	// Atomically claim the signature so two workers importing byte-identical
+	// assets in the same batch can't both pass the dedup check and each create a
+	// record. If we don't reach a successful Add (any error below), release the
+	// claim so a later item — or a re-run — is not wrongly skipped as a duplicate.
+	if !u.store.ReserveSig(sig) {
 		return Duplicate, nil, nil
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			u.store.ReleaseSig(sig)
+		}
+	}()
 
 	// 1. Encrypt + upload the original.
 	originalRef, originalKey, err := u.encStore(ctx, plain)
@@ -136,11 +148,33 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 	// backfills thumb/medium/EXIF/ML later. --process (or an ML mode) opts into the
 	// transient-plaintext server transform.
 	if !u.process && !u.withML && u.analyzer == nil {
+		// A direct-import source (Immich) already holds authoritative capture
+		// metadata: write the cold meta blob and promote the display fields from
+		// it, with NO plaintext egress, so a no-ML import still produces a rich
+		// record. Thumb/ML stay pending for a GUI client to backfill (an empty
+		// ProcessResult carries no renditions/faces/embedding; applyDerived folds
+		// item.Imported in).
+		if item.Imported != nil {
+			// No /process and no ML ran, so nothing reverse-geocoded this photo:
+			// pass geoAttempted=false so its injected GPS still invites a richer
+			// client's place backfill (geoChecked stays false), just as thumb/ML
+			// stay pending.
+			if err := u.applyDerived(ctx, rec, api.ProcessResult{}, item, false, false); err != nil {
+				return 0, nil, err
+			}
+			rec.ThumbPending = true
+			if err := u.store.Add(rec); err != nil {
+				return 0, nil, err
+			}
+			committed = true
+			return Uploaded, rec, nil
+		}
 		rec.SetPartial(true)
 		rec.ThumbPending = true
 		if err := u.store.Add(rec); err != nil {
 			return 0, nil, err
 		}
+		committed = true
 		return Uploaded, rec, nil
 	}
 
@@ -162,13 +196,16 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 		mlResolved = true
 	}
 
-	if err := u.applyDerived(ctx, rec, d, item, mlResolved); err != nil {
+	// The /process transform reverse-geocodes on the server, so a place was
+	// genuinely attempted here (geoChecked=true) even when none was found.
+	if err := u.applyDerived(ctx, rec, d, item, mlResolved, true); err != nil {
 		return 0, nil, err
 	}
 
 	if err := u.store.Add(rec); err != nil {
 		return 0, nil, err
 	}
+	committed = true
 	return Uploaded, rec, nil
 }
 
@@ -233,7 +270,41 @@ func (u *Uploader) runLocalML(ctx context.Context, d *api.ProcessResult) error {
 // face crops, metadata) and promotes the display fields onto the record.
 // mlResolved reports whether the ML pass (server or local) ran, so the record is
 // marked analysed instead of leaving it for the web client's deferred pass.
-func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.ProcessResult, item Item, mlResolved bool) error {
+// geoAttempted reports whether a reverse-geocode pass actually ran (it does on
+// /process, not on the no-egress injected import); it gates geoChecked so a photo
+// with injected GPS but no place is not falsely marked "geo already checked",
+// which would suppress a richer client's place backfill.
+func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.ProcessResult, item Item, mlResolved, geoAttempted bool) error {
+	// Fold in authoritative import metadata (Immich): injected TakenAt wins over
+	// /process EXIF (§4.1 precedence); GPS/camera/dims/duration fill only where the
+	// derived data has none, so recomputed thumbs/faces/embeddings still layer on
+	// top. d is a value copy — mutating it here does not touch the caller's.
+	if im := item.Imported; im != nil {
+		if !im.TakenAt.IsZero() {
+			d.Exif.TakenAt = im.TakenAt.UTC().Format(time.RFC3339)
+		}
+		if d.Exif.Lat == nil {
+			d.Exif.Lat = im.Lat
+		}
+		if d.Exif.Lon == nil {
+			d.Exif.Lon = im.Lon
+		}
+		if d.Exif.Camera == nil {
+			if cam := importedCamera(im); cam != "" {
+				d.Exif.Camera = &cam
+			}
+		}
+		if d.Width == 0 {
+			d.Width = im.Width
+		}
+		if d.Height == 0 {
+			d.Height = im.Height
+		}
+		if d.Duration == nil {
+			d.Duration = im.DurationSec
+		}
+	}
+
 	if b, ok := decodeB64(d.Thumb); ok {
 		ref, key, err := u.encStore(ctx, b)
 		if err != nil {
@@ -290,6 +361,10 @@ func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.Pro
 		Duration:  d.Duration,
 		ContentID: d.ContentID,
 	}
+	if item.Imported != nil {
+		fav := item.Imported.Favorite
+		meta.Favorite = &fav
+	}
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		return err
@@ -313,7 +388,7 @@ func (u *Uploader) applyDerived(ctx context.Context, rec *PhotoRecord, d api.Pro
 	rec.Lat, rec.Lng = dec6Ptr(d.Exif.Lat), dec6Ptr(d.Exif.Lon)
 	rec.Camera = d.Exif.Camera
 	rec.EmbModel = embModel
-	rec.GeoChecked = true
+	rec.GeoChecked = geoAttempted
 	if d.ContentID != nil {
 		rec.contentID = *d.ContentID // used to pair Live Photo halves post-upload
 	}
@@ -386,6 +461,12 @@ func roundDuration(f *float64) *int {
 	}
 	n := int(math.Round(*f))
 	return &n
+}
+
+// importedCamera joins an import source's camera make and model into the single
+// camera string the record/meta blob use ("Make Model"), or "" when neither is set.
+func importedCamera(m *ImportedMeta) string {
+	return strings.TrimSpace(strings.TrimSpace(m.CameraMake) + " " + strings.TrimSpace(m.CameraModel))
 }
 
 // dec6Ptr formats a float coordinate as a fixed 6-dp decimal string (or nil), the

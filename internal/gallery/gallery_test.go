@@ -63,15 +63,21 @@ func TestPairItemsLivePhoto(t *testing.T) {
 // mockServer emulates the vault + gallery endpoints against an in-memory blob
 // store, so the pipeline can be exercised end to end.
 type mockServer struct {
-	srv        *httptest.Server
-	vk         []byte
-	mu         sync.Mutex
-	blobs      map[string][]byte
-	store      string
-	version    int64
-	nextID     int
-	lastShards []string       // shards[] from the most recent store PUT (integrity guard)
-	lastCounts map[string]int // counts{} from the most recent store PUT (anomaly-scan; nil if omitted)
+	srv          *httptest.Server
+	vk           []byte
+	mu           sync.Mutex
+	blobs        map[string][]byte
+	store        string
+	version      int64
+	nextID       int
+	lastShards   []string       // shards[] from the most recent store PUT (integrity guard)
+	lastCounts   map[string]int // counts{} from the most recent store PUT (anomaly-scan; nil if omitted)
+	processCalls int            // number of /process (transient-plaintext) calls seen
+
+	// failUploadAfterSave, when set, makes /gallery/upload answer 401 once the store
+	// has been saved at least once (version > 0) — a test hook to fire a Ledgerline
+	// auth-fatal on a later batch while the first batch imports cleanly.
+	failUploadAfterSave bool
 }
 
 func newMockServer(t *testing.T, passphrase string) *mockServer {
@@ -131,6 +137,13 @@ func newMockServer(t *testing.T, passphrase string) *mockServer {
 		json.NewEncoder(w).Encode(map[string]any{"version": m.version})
 	})
 	mux.HandleFunc("/api/v1/gallery/upload", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		fail := m.failUploadAfterSave && m.version > 0
+		m.mu.Unlock()
+		if fail {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		f, _, err := r.FormFile("file")
 		if err != nil {
 			w.WriteHeader(400)
@@ -158,6 +171,9 @@ func newMockServer(t *testing.T, passphrase string) *mockServer {
 		w.Write(data)
 	})
 	mux.HandleFunc("/api/v1/gallery/process", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.processCalls++
+		m.mu.Unlock()
 		b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 		json.NewEncoder(w).Encode(map[string]any{
 			"media_type": "image", "width": 4, "height": 3, "duration": nil, "content_id": nil,

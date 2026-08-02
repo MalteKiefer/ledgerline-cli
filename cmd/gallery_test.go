@@ -1,6 +1,11 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+)
 
 func TestMotionSidecarPath(t *testing.T) {
 	cases := map[string]string{
@@ -45,6 +50,67 @@ func TestValidateUploadFlags(t *testing.T) {
 			err := validateUploadFlags(tc.opts)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("validateUploadFlags(%+v) err=%v, wantErr=%v", tc.opts, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateImportFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    importOptions
+		wantErr bool
+	}{
+		{"immich with url and jobs", importOptions{immich: true, immichURL: "http://host:2283", jobs: 1}, false},
+		{"no backend chosen", importOptions{immichURL: "http://host:2283", jobs: 1}, true},
+		{"immich without url", importOptions{immich: true, jobs: 1}, true},
+		{"immich with blank url", importOptions{immich: true, immichURL: "   ", jobs: 1}, true},
+		{"server and local ML together", importOptions{immich: true, immichURL: "http://host:2283", withML: true, mlLocalURL: "http://localhost:3003", jobs: 1}, true},
+		{"local ML alone is fine", importOptions{immich: true, immichURL: "http://host:2283", mlLocalURL: "http://localhost:3003", jobs: 1}, false},
+		{"zero jobs is rejected", importOptions{immich: true, immichURL: "http://host:2283", jobs: 0}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateImportFlags(tc.opts)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateImportFlags(%+v) err=%v, wantErr=%v", tc.opts, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestResolveImmichKey pins the secret-resolution order (IMMICH_API_KEY env →
+// prompt → --immich-key flag) and the no-key error. A non-*os.File stdin makes
+// isTerminalIn false, so the interactive prompt branch is skipped and the
+// env-vs-flag precedence is what these cases exercise.
+func TestResolveImmichKey(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     string
+		flagKey string
+		want    string
+		wantErr bool
+	}{
+		{"env preferred over flag", "env-key", "flag-key", "env-key", false},
+		{"env is trimmed", "  spaced-key  ", "flag-key", "spaced-key", false},
+		{"flag used when env empty", "", "flag-key", "flag-key", false},
+		{"flag is trimmed", "", "  flag-key  ", "flag-key", false},
+		{"no key anywhere errors", "", "", "", true},
+		{"blank env and blank flag error", "   ", "   ", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("IMMICH_API_KEY", tc.env)
+			cmd := &cobra.Command{}
+			// A strings.Reader is not an *os.File, so isTerminalIn is false and the
+			// no-echo prompt branch is skipped in the test harness.
+			cmd.SetIn(strings.NewReader(""))
+			got, err := resolveImmichKey(cmd, tc.flagKey)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolveImmichKey env=%q flag=%q err=%v, wantErr=%v", tc.env, tc.flagKey, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveImmichKey env=%q flag=%q = %q, want %q", tc.env, tc.flagKey, got, tc.want)
 			}
 		})
 	}
