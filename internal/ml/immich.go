@@ -189,10 +189,12 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 
 	res := Result{Embedding: parseEmbedding(pr.Clip)}
 	if len(pr.Faces) > 0 {
+		// Face crops are best-effort: the ML service decodes formats the Go
+		// client cannot (e.g. HEIC/HEIF from Apple devices). If the original
+		// won't decode here, keep each face's box + embedding (the parts that
+		// power search and clustering) and simply omit the crop image, rather
+		// than failing the whole asset's import.
 		img, derr := decodeImageBounded(jpegData)
-		if derr != nil {
-			return Result{}, fmt.Errorf("decode image for face crops: %w", derr)
-		}
 		for _, f := range pr.Faces {
 			emb := parseEmbedding(f.Embedding)
 			if len(emb) == 0 {
@@ -203,9 +205,11 @@ func (m *Immich) Analyze(ctx context.Context, jpegData []byte) (Result, error) {
 				continue
 			}
 			box := []float64{bb.X1, bb.Y1, bb.X2, bb.Y2}
-			crop, cerr := cropFace(img, int(bb.X1), int(bb.Y1), int(bb.X2), int(bb.Y2))
-			if cerr != nil {
-				continue
+			var crop []byte
+			if derr == nil {
+				if c, cerr := cropFace(img, int(bb.X1), int(bb.Y1), int(bb.X2), int(bb.Y2)); cerr == nil {
+					crop = c
+				}
 			}
 			res.Faces = append(res.Faces, Face{Score: f.Score, Box: box, Embedding: emb, CropJPEG: crop})
 		}
