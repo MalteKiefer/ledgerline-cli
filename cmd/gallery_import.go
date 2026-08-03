@@ -11,6 +11,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/gallery"
+	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 )
 
 // newGalleryImportCommand defines the `gallery import` command. Today the only
@@ -50,6 +51,8 @@ func newGalleryImportCommand() *cobra.Command {
 	f.BoolVar(&opts.immich, "immich", false, "import from an Immich server (required)")
 	f.StringVar(&opts.immichURL, "immich-url", "", "Immich base URL, e.g. http://host:2283")
 	f.StringVar(&opts.immichKey, "immich-key", "", "Immich API key (leaks into the process list; prefer IMMICH_API_KEY or the prompt)")
+	f.BoolVar(&opts.saveKey, "save-key", false, "store the resolved Immich API key in the OS keychain (keyed by --immich-url) so future runs need no key")
+	f.BoolVar(&opts.forgetKey, "forget-key", false, "remove the saved Immich API key for --immich-url from the OS keychain and exit")
 	f.BoolVar(&opts.withML, "ml", false, "run face detection + search embeddings on the server (needs the server ML service; implies --process)")
 	f.StringVar(&opts.mlLocalURL, "ml-local", "", "run ML on a local immich-machine-learning instance at this URL instead of the server")
 	f.StringVar(&opts.mlClipModel, "ml-clip-model", defaultClipModel, "CLIP model name for --ml-local (must match the server's Smart Search model)")
@@ -66,6 +69,8 @@ type importOptions struct {
 	immich      bool
 	immichURL   string
 	immichKey   string
+	saveKey     bool
+	forgetKey   bool
 	withML      bool
 	mlLocalURL  string
 	mlClipModel string
@@ -82,7 +87,15 @@ func runImport(cmd *cobra.Command, opts importOptions) error {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
 
-	apiKey, err := resolveImmichKey(cmd, opts.immichKey)
+	if opts.forgetKey {
+		if err := session.ClearImmichKey(opts.immichURL); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Removed any saved Immich API key for %s.\n", opts.immichURL)
+		return nil
+	}
+
+	apiKey, err := resolveImmichKey(cmd, opts.immichURL, opts.immichKey, opts.saveKey)
 	if err != nil {
 		return err
 	}
@@ -195,12 +208,31 @@ func validateImportFlags(opts importOptions) error {
 // resolveImmichKey yields the Immich API key without ever putting it on the
 // required argv. Order: IMMICH_API_KEY env → interactive no-echo prompt (only on
 // a terminal) → --immich-key flag (documented as leaking into the process list).
-func resolveImmichKey(cmd *cobra.Command, flagKey string) (string, error) {
-	if k := strings.TrimSpace(os.Getenv("IMMICH_API_KEY")); k != "" {
+// resolveImmichKey finds the Immich API key in precedence order — explicit
+// --immich-key, the IMMICH_API_KEY env var, the OS keychain (saved for this
+// immichURL), then an interactive no-echo prompt. A key that did NOT come from
+// the keychain is written back to it when saveKey is set, so a later run needs
+// no key. The keychain lookup/save is keyed by immichURL so multiple servers
+// don't collide.
+func resolveImmichKey(cmd *cobra.Command, immichURL, flagKey string, saveKey bool) (string, error) {
+	out := cmd.OutOrStdout()
+	persist := func(k string) (string, error) {
+		if saveKey {
+			if err := session.SaveImmichKey(immichURL, k); err != nil {
+				return "", fmt.Errorf("save Immich key: %w", err)
+			}
+			fmt.Fprintln(out, "Immich API key saved to the OS keychain.")
+		}
 		return k, nil
 	}
+
+	if k := strings.TrimSpace(os.Getenv("IMMICH_API_KEY")); k != "" {
+		return persist(k)
+	}
+	if k, err := session.LoadImmichKey(immichURL); err == nil && k != "" {
+		return k, nil // already stored — nothing to persist
+	}
 	if in := cmd.InOrStdin(); isTerminalIn(in) {
-		out := cmd.OutOrStdout()
 		fmt.Fprint(out, "Immich API key: ")
 		k, err := readPassword(in)
 		fmt.Fprintln(out)
@@ -208,13 +240,13 @@ func resolveImmichKey(cmd *cobra.Command, flagKey string) (string, error) {
 			return "", err
 		}
 		if k = strings.TrimSpace(k); k != "" {
-			return k, nil
+			return persist(k)
 		}
 	}
 	if k := strings.TrimSpace(flagKey); k != "" {
-		return k, nil
+		return persist(k)
 	}
-	return "", errors.New("no Immich API key: set IMMICH_API_KEY, run interactively to be prompted, or pass --immich-key (leaks into the process list)")
+	return "", errors.New("no Immich API key: set IMMICH_API_KEY, save one with --save-key, run interactively to be prompted, or pass --immich-key (leaks into the process list)")
 }
 
 // isTerminalIn reports whether the given reader is an interactive terminal, so

@@ -91,6 +91,46 @@ var ErrNoVaultKey = errors.New("no cached vault key")
 // keychain is available (caching to a file would store the master key plaintext).
 var ErrNoKeychainForVaultKey = errors.New("cannot cache the vault key without an OS keychain")
 
+// ErrNoImmichKey means no Immich API key is stored for the given server.
+var ErrNoImmichKey = errors.New("no saved Immich API key")
+
+// ErrNoKeychainForImmichKey means the Immich API key cannot be saved because no
+// OS keychain is available (a plaintext-file fallback would defeat the point of
+// storing the secret at rest safely).
+var ErrNoKeychainForImmichKey = errors.New("cannot save the Immich API key without an OS keychain")
+
+// immichKeyringUser is the keychain account for a saved Immich API key, kept
+// distinct from the token/vault accounts and namespaced by the Immich base URL
+// so keys for different Immich servers do not collide.
+func immichKeyringUser(immichURL string) string { return "immich:" + immichURL }
+
+// SaveImmichKey stores an Immich API key in the OS keychain, keyed by the Immich
+// base URL. It requires a real keychain — there is no plaintext-file fallback for
+// a third-party secret (unlike the bearer token, whose file fallback is a
+// documented compromise for headless hosts).
+func SaveImmichKey(immichURL, key string) error {
+	if err := keyring.Set(keyringService, immichKeyringUser(immichURL), key); err != nil {
+		return ErrNoKeychainForImmichKey
+	}
+	return nil
+}
+
+// LoadImmichKey returns the Immich API key saved for immichURL, or ErrNoImmichKey
+// when none is stored (or no keychain is available).
+func LoadImmichKey(immichURL string) (string, error) {
+	k, err := keyring.Get(keyringService, immichKeyringUser(immichURL))
+	if err != nil || k == "" {
+		return "", ErrNoImmichKey
+	}
+	return k, nil
+}
+
+// ClearImmichKey removes the Immich API key saved for immichURL (no error if none).
+func ClearImmichKey(immichURL string) error {
+	_ = keyring.Delete(keyringService, immichKeyringUser(immichURL))
+	return nil
+}
+
 // Save persists s, writing the token to the OS keychain when possible and
 // otherwise to the 0600 config file. It records the backend actually used on the
 // returned session's Backend field (and on disk).

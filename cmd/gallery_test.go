@@ -105,7 +105,7 @@ func TestResolveImmichKey(t *testing.T) {
 			// A strings.Reader is not an *os.File, so isTerminalIn is false and the
 			// no-echo prompt branch is skipped in the test harness.
 			cmd.SetIn(strings.NewReader(""))
-			got, err := resolveImmichKey(cmd, tc.flagKey)
+			got, err := resolveImmichKey(cmd, "", tc.flagKey, false)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("resolveImmichKey env=%q flag=%q err=%v, wantErr=%v", tc.env, tc.flagKey, err, tc.wantErr)
 			}
