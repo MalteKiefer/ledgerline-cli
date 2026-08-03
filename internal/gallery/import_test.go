@@ -202,7 +202,7 @@ func TestImmichImportPerAssetFailureRetries(t *testing.T) {
 		t.Fatalf("open ledger: %v", err)
 	}
 	stats, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 1, Batch: 3}, nil)
+		ImportOptions{Jobs: 1, Batch: 3}, nil, nil)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestImmichImportPerAssetFailureRetries(t *testing.T) {
 	}
 	defer ledger2.Close()
 	stats2, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger2,
-		ImportOptions{Jobs: 1, Batch: 3}, nil)
+		ImportOptions{Jobs: 1, Batch: 3}, nil, nil)
 	if err != nil {
 		t.Fatalf("import (run 2): %v", err)
 	}
@@ -272,7 +272,7 @@ func TestImmichImportLedgerlineAuthFatalAborts(t *testing.T) {
 	}
 	defer ledger.Close()
 	stats, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 1, Batch: 1}, nil)
+		ImportOptions{Jobs: 1, Batch: 1}, nil, nil)
 	if err == nil {
 		t.Fatal("a Ledgerline 401 mid-run must abort with an error")
 	}
@@ -315,7 +315,7 @@ func TestImmichImportDuplicateAfterDownload(t *testing.T) {
 	}
 	// Jobs=1 so asset-0 registers its signature before asset-1 is processed.
 	stats, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 1, Batch: 2}, nil)
+		ImportOptions{Jobs: 1, Batch: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestImmichImportDuplicateAfterDownload(t *testing.T) {
 	}
 	defer ledger2.Close()
 	stats2, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger2,
-		ImportOptions{Jobs: 1, Batch: 2}, nil)
+		ImportOptions{Jobs: 1, Batch: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("import (run 2): %v", err)
 	}
@@ -380,7 +380,7 @@ func TestImmichImportDryRun(t *testing.T) {
 	f.m.mu.Unlock()
 
 	stats, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 2, Batch: 2, DryRun: true}, nil)
+		ImportOptions{Jobs: 2, Batch: 2, DryRun: true}, nil, nil)
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestImmichImportExcludesEnumeratedMotionHalf(t *testing.T) {
 	}
 	defer ledger.Close()
 	stats, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 1, Batch: 2}, nil)
+		ImportOptions{Jobs: 1, Batch: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestImmichImportMotionFailureFailsWholeAsset(t *testing.T) {
 		t.Fatalf("open ledger: %v", err)
 	}
 	stats, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 1, Batch: 1}, nil)
+		ImportOptions{Jobs: 1, Batch: 1}, nil, nil)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestImmichImportMotionFailureFailsWholeAsset(t *testing.T) {
 	}
 	defer ledger2.Close()
 	stats2, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger2,
-		ImportOptions{Jobs: 1, Batch: 1}, nil)
+		ImportOptions{Jobs: 1, Batch: 1}, nil, nil)
 	if err != nil {
 		t.Fatalf("import (run 2): %v", err)
 	}
@@ -538,7 +538,7 @@ func TestImmichImportCancellationIsDurableAndResumable(t *testing.T) {
 		t.Fatalf("open ledger: %v", err)
 	}
 	stats, err := RunImmichImport(ctx, f.up, f.store, f.client, ledger,
-		ImportOptions{Jobs: 1, Batch: 1}, nil)
+		ImportOptions{Jobs: 1, Batch: 1}, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled run returned err = %v, want context.Canceled", err)
 	}
@@ -563,7 +563,7 @@ func TestImmichImportCancellationIsDurableAndResumable(t *testing.T) {
 	}
 	defer ledger2.Close()
 	stats2, err := RunImmichImport(context.Background(), f.up, f.store, f.client, ledger2,
-		ImportOptions{Jobs: 1, Batch: 1}, nil)
+		ImportOptions{Jobs: 1, Batch: 1}, nil, nil)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -663,7 +663,7 @@ func TestRunImmichImportBatchesResumeAndLivePhoto(t *testing.T) {
 	}
 
 	stats, err := RunImmichImport(ctx, up, store, client, ledger,
-		ImportOptions{Jobs: 3, Batch: B}, nil)
+		ImportOptions{Jobs: 3, Batch: B}, nil, nil)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -735,7 +735,7 @@ func TestRunImmichImportBatchesResumeAndLivePhoto(t *testing.T) {
 	}
 	defer ledger2.Close()
 	stats2, err := RunImmichImport(ctx, up, store, client, ledger2,
-		ImportOptions{Jobs: 3, Batch: B}, nil)
+		ImportOptions{Jobs: 3, Batch: B}, nil, nil)
 	if err != nil {
 		t.Fatalf("import (run 2): %v", err)
 	}

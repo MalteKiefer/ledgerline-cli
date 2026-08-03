@@ -27,6 +27,11 @@ type ImportOptions struct {
 	Jobs   int
 	Batch  int
 	DryRun bool
+	// Total is the library asset count for the progress display (0 = unknown, so
+	// progress shows a running count with no percentage). The caller supplies it
+	// (via ImmichClient.LibraryCount) so it and any progress bar agree on one
+	// number and the count is fetched once.
+	Total int
 }
 
 // ImportStats is the tally returned by a run. Imported = newly sealed records;
@@ -40,19 +45,28 @@ type ImportStats struct {
 	Failed    int
 }
 
+// ImportProgress is a snapshot of an import's progress, reported after each
+// asset is accounted for so a caller can drive a live progress bar. Total is 0
+// when the library count is unknown.
+type ImportProgress struct {
+	Done, Total int
+	Current     string
+	Stats       ImportStats
+}
+
 // RunImmichImport imports an entire Immich library into the gallery. It enumerates
 // via search/metadata in descending taken-time windows (§6), drops asset ids
 // already in the ledger BEFORE downloading, and processes the rest in batches of
-// opts.Batch with a bounded pool
-// of opts.Jobs workers. Each asset's original (and any Live Photo motion clip) is
-// downloaded to a per-batch temp dir, its Immich exif mapped into an ImportedMeta,
-// and fed through the existing Uploader; after a batch the store is checkpointed,
-// the batch's imported ids are recorded in the ledger, and the temp dir is removed.
-// A per-asset failure is counted and the run continues; a Ledgerline auth-fatal
-// (api 401) or an enumeration error (which is where a revoked Immich key surfaces)
-// aborts. Ctx cancellation is honoured between batches, leaving a consistent
-// ledger + saved manifest for a resumed re-run. The Immich API key is never logged.
-func RunImmichImport(ctx context.Context, up *Uploader, store *Store, client *ImmichClient, ledger *ImportLedger, opts ImportOptions, log func(string)) (ImportStats, error) {
+// opts.Batch with a bounded pool of opts.Jobs workers. Each asset's original (and
+// any Live Photo motion clip) is downloaded to a per-batch temp dir, its Immich
+// exif mapped into an ImportedMeta, and fed through the existing Uploader; after a
+// batch the store is checkpointed, the batch's imported ids are recorded in the
+// ledger, and the temp dir is removed. A per-asset failure is counted and the run
+// continues; a Ledgerline auth-fatal (api 401) or an enumeration error (which is
+// where a revoked Immich key surfaces) aborts. Ctx cancellation is honoured
+// between batches, leaving a consistent ledger + saved manifest for a resumed
+// re-run. The Immich API key is never logged.
+func RunImmichImport(ctx context.Context, up *Uploader, store *Store, client *ImmichClient, ledger *ImportLedger, opts ImportOptions, log func(string), progress func(ImportProgress)) (ImportStats, error) {
 	if opts.Jobs < 1 {
 		opts.Jobs = 1
 	}
@@ -60,14 +74,7 @@ func RunImmichImport(ctx context.Context, up *Uploader, store *Store, client *Im
 		opts.Batch = 1
 	}
 
-	r := &importRun{up: up, store: store, client: client, ledger: ledger, opts: opts, log: log}
-
-	// Best-effort library total for the progress display (search/metadata reports
-	// only a per-page count, so ask the statistics endpoint). A failure just leaves
-	// r.total at 0 and progress shows a running count with no percentage.
-	if n, cerr := client.LibraryCount(ctx); cerr == nil && n > 0 {
-		r.total = n
-	}
+	r := &importRun{up: up, store: store, client: client, ledger: ledger, opts: opts, log: log, progress: progress, total: opts.Total}
 
 	// motionIDs collects the livePhotoVideoId of every still seen, so a paired
 	// motion asset is never enumerated as a standalone item (belt-and-suspenders on
@@ -132,10 +139,12 @@ enumerate:
 			}
 			if ledger.Has(a.ID) {
 				r.stats.Skipped++
+				r.reportProgress(a.OriginalFileName)
 				continue
 			}
 			if opts.DryRun {
 				r.stats.Imported++ // would-import; no download in a dry run
+				r.reportProgress(a.OriginalFileName)
 				continue
 			}
 			batch = append(batch, a)
@@ -184,7 +193,8 @@ type importRun struct {
 	opts   ImportOptions
 	log    func(string)
 
-	total int // whole-library asset count from the first search page (0 = unknown)
+	total    int                  // whole-library asset count (0 = unknown)
+	progress func(ImportProgress) // optional live progress callback (may be nil)
 
 	mu       sync.Mutex
 	stats    ImportStats
@@ -196,6 +206,18 @@ type importRun struct {
 // already-in-ledger, or failed) — the numerator for progress against total.
 func (r *importRun) processed() int {
 	return r.stats.Imported + r.stats.Duplicate + r.stats.Skipped + r.stats.Failed
+}
+
+// reportProgress fires the progress callback with the current tallies. It holds
+// mu across the callback so concurrent workers serialize (the callback drives a
+// non-thread-safe progress bar).
+func (r *importRun) reportProgress(current string) {
+	if r.progress == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.progress(ImportProgress{Done: r.processed(), Total: r.total, Current: current, Stats: r.stats})
 }
 
 // progressSuffix renders " — N/M (P%)" against the known library total, or "" when
@@ -387,6 +409,7 @@ func (r *importRun) one(ctx context.Context, tmpDir string, idx int, a ImmichAss
 		r.mu.Unlock()
 		r.logf("%s: imported", a.OriginalFileName)
 	}
+	r.reportProgress(a.OriginalFileName)
 }
 
 // fail counts a per-asset failure and logs it (without the API key, which never

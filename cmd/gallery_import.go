@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/MalteKiefer/ledgerline-cli/internal/config"
 	"github.com/MalteKiefer/ledgerline-cli/internal/gallery"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
 
 // newGalleryImportCommand defines the `gallery import` command. Today the only
@@ -61,6 +65,7 @@ func newGalleryImportCommand() *cobra.Command {
 	f.IntVarP(&opts.jobs, "jobs", "j", defaultJobs, "number of assets to seal/upload in parallel")
 	f.IntVar(&opts.batch, "batch", defaultBatch, "download, seal and save this many assets before each checkpoint")
 	f.BoolVar(&opts.dryRun, "dry-run", false, "enumerate and count new vs already-imported assets without downloading or writing")
+	f.StringVar(&opts.logPath, "log", "", "per-asset detail log file (default <config>/immich-import/import.log)")
 	return cmd
 }
 
@@ -71,6 +76,7 @@ type importOptions struct {
 	immichKey   string
 	saveKey     bool
 	forgetKey   bool
+	logPath     string
 	withML      bool
 	mlLocalURL  string
 	mlClipModel string
@@ -166,12 +172,61 @@ func runImport(cmd *cobra.Command, opts importOptions) error {
 		defer reportSync(context.WithoutCancel(ctx), client, "idle", "")
 	}
 
-	logf := func(line string) { fmt.Fprintln(out, line) }
+	// Library total (best-effort) so the bar and the checkpoint suffix agree.
+	total, _ := immich.LibraryCount(ctx)
+
+	// Per-asset detail goes to a log file so the terminal stays a clean progress
+	// bar; the terminal echoes the detail only when there is no bar (unknown
+	// total, piped output, or a dry run).
+	logPath := strings.TrimSpace(opts.logPath)
+	if logPath == "" {
+		dir, derr := config.Dir()
+		if derr != nil {
+			return derr
+		}
+		logPath = filepath.Join(dir, "immich-import", "import.log")
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open import log %s: %w", logPath, err)
+	}
+	defer lf.Close()
+
+	useBar := term.IsTerminal(int(os.Stdout.Fd())) && !opts.dryRun && total > 0
+	var bar *ui.ProgressBar
+	if useBar {
+		fmt.Fprintf(out, "Details logged to %s\n", logPath)
+		bar = ui.NewProgressBar(out, total, true)
+	}
+
+	var logMu sync.Mutex
+	logf := func(line string) {
+		logMu.Lock()
+		fmt.Fprintln(lf, line)
+		logMu.Unlock()
+		if !useBar {
+			fmt.Fprintln(out, line)
+		}
+	}
+	var progress func(gallery.ImportProgress)
+	if useBar {
+		progress = func(p gallery.ImportProgress) {
+			bar.Update(p.Done, fmt.Sprintf("↑%d ⏭%d ⧉%d ✗%d", p.Stats.Imported, p.Stats.Skipped, p.Stats.Duplicate, p.Stats.Failed))
+		}
+	}
+
 	stats, err := gallery.RunImmichImport(ctx, uploader, store, immich, ledger, gallery.ImportOptions{
 		Jobs:   jobs,
 		Batch:  batch,
 		DryRun: opts.dryRun,
-	}, logf)
+		Total:  total,
+	}, logf, progress)
+	if bar != nil {
+		bar.Finish()
+	}
 
 	if opts.dryRun {
 		fmt.Fprintf(out, "Dry run: %d new asset(s) to import, %d already imported.\n", stats.Imported, stats.Skipped)
