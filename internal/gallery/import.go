@@ -62,6 +62,13 @@ func RunImmichImport(ctx context.Context, up *Uploader, store *Store, client *Im
 
 	r := &importRun{up: up, store: store, client: client, ledger: ledger, opts: opts, log: log}
 
+	// Best-effort library total for the progress display (search/metadata reports
+	// only a per-page count, so ask the statistics endpoint). A failure just leaves
+	// r.total at 0 and progress shows a running count with no percentage.
+	if n, cerr := client.LibraryCount(ctx); cerr == nil && n > 0 {
+		r.total = n
+	}
+
 	// motionIDs collects the livePhotoVideoId of every still seen, so a paired
 	// motion asset is never enumerated as a standalone item (belt-and-suspenders on
 	// top of the timeline visibility filter, which already hides motion halves).
@@ -88,7 +95,7 @@ enumerate:
 		if ctx.Err() != nil {
 			break
 		}
-		assets, _, total, err := client.SearchPage(ctx, page, immichSearchPageSize,
+		assets, _, _, err := client.SearchPage(ctx, page, immichSearchPageSize,
 			SearchOptions{WithPeople: false, TakenBefore: takenBefore})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -96,11 +103,6 @@ enumerate:
 			}
 			// A revoked/invalid Immich key (401/403) surfaces here — abort.
 			return r.stats, fmt.Errorf("enumerate Immich library: %w", err)
-		}
-		// The first unfiltered page's total is the whole-library count (later
-		// windowed pages report only their window's total), so latch it once.
-		if r.total == 0 && total > 0 {
-			r.total = total
 		}
 
 		// Window bookkeeping over the RAW page (before dedup): the oldest taken-time

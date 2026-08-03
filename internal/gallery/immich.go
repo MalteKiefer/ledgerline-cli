@@ -193,6 +193,44 @@ func (c *ImmichClient) Ping(ctx context.Context) error {
 	return nil
 }
 
+// LibraryCount returns the caller's total non-archived, non-trashed asset count
+// via GET /api/assets/statistics, used only as the denominator for a progress
+// display. It is best-effort: a non-2xx, an unparseable body, or an unsupported
+// endpoint yields (0, err) and the caller simply shows a running count with no
+// percentage. (search/metadata's own `total` is per-page, not a library total.)
+func (c *ImmichClient) LibraryCount(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, immichCallTimeout)
+	defer cancel()
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/assets/statistics?isArchived=false&isTrashed=false", nil, false)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, immichError(resp)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		Total  int `json:"total"`
+		Images int `json:"images"`
+		Videos int `json:"videos"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, err
+	}
+	if out.Total > 0 {
+		return out.Total, nil
+	}
+	return out.Images + out.Videos, nil
+}
+
 // SearchPage fetches one page of the library via POST /api/search/metadata,
 // requesting exif (and optionally people) in descending taken-time order with a
 // stable timeline visibility and no deleted assets. When opts.TakenBefore is set
