@@ -2,21 +2,51 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 )
 
-// User is the authenticated identity returned by the API.
+// User is the authenticated identity returned by the API (MeUser schema).
 type User struct {
 	ID     int64    `json:"id"`
 	Name   string   `json:"name"`
 	Email  string   `json:"email"`
 	Locale string   `json:"locale"`
 	Groups []string `json:"groups"`
+	// Modules the account may use (per-user/group toggles); a client hides tabs
+	// for modules not listed. Enum: dashboard, files, gallery, passwords, notes,
+	// todos, bookmarks, contacts, finance, health, explore.
+	Modules []string `json:"modules"`
+	// HasAvatar reports whether a non-secret avatar is stored (fetch via Avatar).
+	HasAvatar bool `json:"has_avatar"`
+	// Preferences is the non-secret display-prefs blob (units + clock); round-trip
+	// verbatim — the CLI does not model its internals.
+	Preferences json.RawMessage `json:"preferences"`
+	// Theme is the current UI theme (light|dark|system).
+	Theme string `json:"theme"`
 }
 
-// Usage is the per-user storage footprint reported by /me.
+// Usage is the per-user storage footprint reported by /me. Quota is the combined
+// files+gallery byte limit; nil means unlimited (the server sends null whenever
+// either dimension is uncapped).
 type Usage struct {
-	Files   int64 `json:"files"`
-	Gallery int64 `json:"gallery"`
+	Files   int64  `json:"files"`
+	Gallery int64  `json:"gallery"`
+	Quota   *int64 `json:"quota"`
+}
+
+// Device is one connected device (Sanctum token) from GET /api/v1/devices.
+type Device struct {
+	ID            int64  `json:"id"`      // Sanctum token id; used in the revoke/wipe path
+	Current       bool   `json:"current"` // true for the device making the request
+	Name          string `json:"name"`
+	Meta          string `json:"meta"`      // "IP · last used 3 hours ago"
+	Version       string `json:"version"`   // non-secret app/OS build, may be ""
+	InstallID     string `json:"installId"` // last 6 chars of the install id, may be ""
+	Syncing       bool   `json:"syncing"`
+	SyncDetail    string `json:"syncDetail"`
+	SyncSeen      string `json:"syncSeen"`
+	WipeRequested bool   `json:"wipeRequested"`
 }
 
 // PairStatus is the state reported by the pairing endpoints.
@@ -98,4 +128,28 @@ func (c *Client) Heartbeat(ctx context.Context, state, detail string) (wipe bool
 // Logout revokes the bearer currently in use (server-side), ending the session.
 func (c *Client) Logout(ctx context.Context) error {
 	return c.request(ctx, "DELETE", "/api/v1/auth/session", nil, nil)
+}
+
+// Devices lists the caller's connected devices (Sanctum tokens), most-recently-
+// used first.
+func (c *Client) Devices(ctx context.Context) ([]Device, error) {
+	var resp struct {
+		Devices []Device `json:"devices"`
+	}
+	if err := c.request(ctx, "GET", "/api/v1/devices", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Devices, nil
+}
+
+// RevokeDevice deletes a connected device's token by its id. The server refuses to
+// revoke the current device (a client should also guard on Device.Current).
+func (c *Client) RevokeDevice(ctx context.Context, id int64) error {
+	return c.request(ctx, "DELETE", "/api/v1/devices/"+strconv.FormatInt(id, 10), nil, nil)
+}
+
+// WipeDevice flags a device for remote wipe: its next /me or /device/heartbeat
+// returns wipe=true, prompting that client to erase local vault data and log out.
+func (c *Client) WipeDevice(ctx context.Context, id int64) error {
+	return c.request(ctx, "POST", "/api/v1/devices/"+strconv.FormatInt(id, 10)+"/wipe", nil, nil)
 }
