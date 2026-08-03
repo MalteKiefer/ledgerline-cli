@@ -142,7 +142,7 @@ func TestImmichSearchPagePaging(t *testing.T) {
 	var all []ImmichAsset
 	page := 1
 	for page != 0 {
-		assets, next, err := c.SearchPage(ctx, page, 250, SearchOptions{WithPeople: true})
+		assets, next, _, err := c.SearchPage(ctx, page, 250, SearchOptions{WithPeople: true})
 		if err != nil {
 			t.Fatalf("SearchPage(%d): %v", page, err)
 		}
@@ -184,7 +184,7 @@ func TestImmichSearchPagePaging(t *testing.T) {
 func TestImmichSearchPageWithPeopleOff(t *testing.T) {
 	m := newMockImmich(t, "secret-key")
 	c := m.client(t)
-	if _, _, err := c.SearchPage(context.Background(), 1, 250, SearchOptions{WithPeople: false}); err != nil {
+	if _, _, _, err := c.SearchPage(context.Background(), 1, 250, SearchOptions{WithPeople: false}); err != nil {
 		t.Fatalf("SearchPage: %v", err)
 	}
 	if m.lastReq["withPeople"] != false {
@@ -250,7 +250,7 @@ func TestImmichUnauthorized(t *testing.T) {
 	if err := c.Ping(ctx); err == nil {
 		t.Fatal("Ping with a bad key must error")
 	}
-	if _, _, err := c.SearchPage(ctx, 1, 250, SearchOptions{}); err == nil {
+	if _, _, _, err := c.SearchPage(ctx, 1, 250, SearchOptions{}); err == nil {
 		t.Fatal("SearchPage with a bad key must error")
 	}
 	m.assets["a1"] = []byte("x")

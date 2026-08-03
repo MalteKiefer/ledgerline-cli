@@ -88,7 +88,7 @@ enumerate:
 		if ctx.Err() != nil {
 			break
 		}
-		assets, _, err := client.SearchPage(ctx, page, immichSearchPageSize,
+		assets, _, total, err := client.SearchPage(ctx, page, immichSearchPageSize,
 			SearchOptions{WithPeople: false, TakenBefore: takenBefore})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -96,6 +96,11 @@ enumerate:
 			}
 			// A revoked/invalid Immich key (401/403) surfaces here — abort.
 			return r.stats, fmt.Errorf("enumerate Immich library: %w", err)
+		}
+		// The first unfiltered page's total is the whole-library count (later
+		// windowed pages report only their window's total), so latch it once.
+		if r.total == 0 && total > 0 {
+			r.total = total
 		}
 
 		// Window bookkeeping over the RAW page (before dedup): the oldest taken-time
@@ -177,10 +182,29 @@ type importRun struct {
 	opts   ImportOptions
 	log    func(string)
 
+	total int // whole-library asset count from the first search page (0 = unknown)
+
 	mu       sync.Mutex
 	stats    ImportStats
 	pending  []ledgerMark // successes to record in the ledger AFTER the checkpoint save
 	fatalErr error        // a Ledgerline auth-fatal that must abort the run
+}
+
+// processed is how many assets the run has accounted for (imported, duplicate,
+// already-in-ledger, or failed) — the numerator for progress against total.
+func (r *importRun) processed() int {
+	return r.stats.Imported + r.stats.Duplicate + r.stats.Skipped + r.stats.Failed
+}
+
+// progressSuffix renders " — N/M (P%)" against the known library total, or "" when
+// the total is unknown (e.g. a dry run that never captured it).
+func (r *importRun) progressSuffix() string {
+	if r.total <= 0 {
+		return ""
+	}
+	done := r.processed()
+	pct := done * 100 / r.total
+	return fmt.Sprintf(" — %d/%d (%d%%)", done, r.total, pct)
 }
 
 // ledgerMark is one imported asset to append to the ledger once the batch that
@@ -246,8 +270,8 @@ func (r *importRun) processBatch(ctx context.Context, batch []ImmichAsset) error
 			return fmt.Errorf("record import in ledger: %w", err)
 		}
 	}
-	r.logf("checkpoint: %d imported, %d duplicate, %d skipped, %d failed",
-		r.stats.Imported, r.stats.Duplicate, r.stats.Skipped, r.stats.Failed)
+	r.logf("checkpoint: %d imported, %d duplicate, %d skipped, %d failed%s",
+		r.stats.Imported, r.stats.Duplicate, r.stats.Skipped, r.stats.Failed, r.progressSuffix())
 
 	if fatal != nil {
 		return fatal

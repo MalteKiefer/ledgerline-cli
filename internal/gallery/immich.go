@@ -49,10 +49,10 @@ type ImmichExif struct {
 // asset id, and Checksum is the base64 SHA-1 of the original (a natural dedup
 // key). Exif is nil unless the search was made with withExif=true.
 type ImmichAsset struct {
-	ID               string      `json:"id"`
-	OriginalFileName string      `json:"originalFileName"`
-	Checksum         string      `json:"checksum"`
-	Type             string      `json:"type"`
+	ID               string         `json:"id"`
+	OriginalFileName string         `json:"originalFileName"`
+	Checksum         string         `json:"checksum"`
+	Type             string         `json:"type"`
 	FileCreatedAt    time.Time      `json:"fileCreatedAt"`
 	LocalDateTime    time.Time      `json:"localDateTime"`
 	Duration         immichDuration `json:"duration"` // "HH:MM:SS.ffffff", a bare number of seconds, or null
@@ -199,7 +199,7 @@ func (c *ImmichClient) Ping(ctx context.Context) error {
 // it bounds the page to that window (design §6 keyset enumeration). It returns the
 // page's assets and the next page number (0 when Immich reports no further page).
 // The JSON body is bounded per the hostile-server rule.
-func (c *ImmichClient) SearchPage(ctx context.Context, page, size int, opts SearchOptions) ([]ImmichAsset, int, error) {
+func (c *ImmichClient) SearchPage(ctx context.Context, page, size int, opts SearchOptions) ([]ImmichAsset, int, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, immichCallTimeout)
 	defer cancel()
 	reqBody := map[string]any{
@@ -216,33 +216,34 @@ func (c *ImmichClient) SearchPage(ctx context.Context, page, size int, opts Sear
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	req, err := c.newRequest(ctx, http.MethodPost, "/api/search/metadata", bytes.NewReader(body), true)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("searching Immich: %w", err)
+		return nil, 0, 0, fmt.Errorf("searching Immich: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, 0, immichError(resp)
+		return nil, 0, 0, immichError(resp)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBytes))
 	if err != nil {
-		return nil, 0, fmt.Errorf("reading Immich search response: %w", err)
+		return nil, 0, 0, fmt.Errorf("reading Immich search response: %w", err)
 	}
 	var out struct {
 		Assets struct {
+			Total    int           `json:"total"`
 			Items    []ImmichAsset `json:"items"`
 			NextPage *string       `json:"nextPage"`
 		} `json:"assets"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, 0, fmt.Errorf("decoding Immich search response: %w", err)
+		return nil, 0, 0, fmt.Errorf("decoding Immich search response: %w", err)
 	}
 
 	// nextPage is null at the end of enumeration (the terminal signal) and a
@@ -254,11 +255,11 @@ func (c *ImmichClient) SearchPage(ctx context.Context, page, size int, opts Sear
 	if out.Assets.NextPage != nil {
 		n, err := strconv.Atoi(strings.TrimSpace(*out.Assets.NextPage))
 		if err != nil {
-			return nil, 0, fmt.Errorf("Immich returned an unparseable nextPage %q", *out.Assets.NextPage)
+			return nil, 0, 0, fmt.Errorf("Immich returned an unparseable nextPage %q", *out.Assets.NextPage)
 		}
 		next = n
 	}
-	return out.Assets.Items, next, nil
+	return out.Assets.Items, next, out.Assets.Total, nil
 }
 
 // DownloadOriginal streams GET /api/assets/{id}/original to destPath (created
