@@ -149,11 +149,13 @@ func (u *Uploader) Upload(ctx context.Context, item Item, plain []byte) (Outcome
 		}
 	}
 
-	// 3a. Immich import with a client-supplied rendition: derive from Immich's own
-	// preview JPEG (thumbnail/medium + local-ML input) instead of the Ledgerline
-	// /process transform. No plaintext egress, and a HEIC/RAW/video original is
-	// thumbnailed and analysed via a decodable JPEG the server never has to handle.
-	if item.RenditionPath != "" {
+	// 3a. Immich import: derive from Immich's own preview JPEG (thumbnail/medium +
+	// local-ML input) instead of the Ledgerline /process transform — a direct
+	// import NEVER egresses plaintext for rendering. This branch owns every
+	// imported asset (item.Imported set), so a video/RAW whose preview did not
+	// download just yields a partial record (thumb/ML pending) here rather than
+	// falling through to /process, which would egress AND fails to render video.
+	if item.Imported != nil {
 		d := api.ProcessResult{}
 		if prev, rerr := readFileCapped(item.RenditionPath); rerr == nil && len(prev) > 0 {
 			b64 := base64.StdEncoding.EncodeToString(prev)
