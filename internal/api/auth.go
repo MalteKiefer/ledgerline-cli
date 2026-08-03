@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"strconv"
 )
 
@@ -19,11 +18,23 @@ type User struct {
 	Modules []string `json:"modules"`
 	// HasAvatar reports whether a non-secret avatar is stored (fetch via Avatar).
 	HasAvatar bool `json:"has_avatar"`
-	// Preferences is the non-secret display-prefs blob (units + clock); round-trip
-	// verbatim — the CLI does not model its internals.
-	Preferences json.RawMessage `json:"preferences"`
+	// Preferences are the non-secret display prefs (units + clock format) the GUI
+	// applies to its own rendering; canonical storage stays metric/ISO.
+	Preferences DisplayPreferences `json:"preferences"`
 	// Theme is the current UI theme (light|dark|system).
 	Theme string `json:"theme"`
+}
+
+// DisplayPreferences are the global non-secret display preferences from GET /me
+// (settable via POST /api/v1/preferences). Presentation only — canonical data
+// stays in metres/kg/°C/mg-dL and 24h.
+type DisplayPreferences struct {
+	Distance   string `json:"distance,omitempty"`    // km | mi
+	Elevation  string `json:"elevation,omitempty"`   // m | ft
+	Weight     string `json:"weight,omitempty"`      // kg | lb
+	Temp       string `json:"temp,omitempty"`        // c | f
+	Glucose    string `json:"glucose,omitempty"`     // mgdl | mmoll
+	TimeFormat string `json:"time_format,omitempty"` // 24h | 12h
 }
 
 // Usage is the per-user storage footprint reported by /me. Quota is the combined
