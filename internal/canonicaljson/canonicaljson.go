@@ -27,8 +27,10 @@ import (
 // integer-only by contract; decimals must be dec-strings.
 var ErrFloat = errors.New("canonicaljson: floating-point numbers are not allowed")
 
-// Marshal serializes v to canonical JSON. It is the sealing/hashing entry point
-// for typed values; it round-trips through encoding/json and then canonicalizes.
+// Marshal serializes v to canonical JSON. It is the HASHING entry point for typed
+// values (shard buckets, collection blobs): it round-trips through encoding/json
+// and canonicalizes STRICTLY — floating-point numbers are rejected so a hashed
+// record stays byte-stable and integer-only across clients (§5.2/§13).
 func Marshal(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -38,9 +40,24 @@ func Marshal(v any) ([]byte, error) {
 }
 
 // Canonicalize re-serializes arbitrary valid JSON into the canonical form. It
-// preserves array order, sorts object keys, strips whitespace, NFC-normalizes
-// strings, and rejects floating-point numbers.
+// preserves array order, sorts object keys, strips whitespace, and rejects
+// floating-point numbers (the strict form used for hashed records).
 func Canonicalize(raw []byte) ([]byte, error) {
+	return canonicalize(raw, false)
+}
+
+// CanonicalizeAllowFloat is Canonicalize but tolerates non-integer numbers,
+// emitting them as JSON numbers (matching the web's String(n)). It is used ONLY
+// for sealing a single-row module manifest (crypto.SealManifest), whose
+// ciphertext is opaque — there is no cross-client hash on it, so a float's exact
+// form is not interop-sensitive. The health module (healthEntries[].v, the
+// profile's heightCm/weightGoalKg) genuinely carries decimals; every SHARDED /
+// HASHED path keeps using strict Marshal, so the shard-hash float guard is intact.
+func CanonicalizeAllowFloat(raw []byte) ([]byte, error) {
+	return canonicalize(raw, true)
+}
+
+func canonicalize(raw []byte, allowFloat bool) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var v any
@@ -48,13 +65,13 @@ func Canonicalize(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	if err := encode(&buf, v); err != nil {
+	if err := encode(&buf, v, allowFloat); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-func encode(buf *bytes.Buffer, v any) error {
+func encode(buf *bytes.Buffer, v any, allowFloat bool) error {
 	switch t := v.(type) {
 	case nil:
 		buf.WriteString("null")
@@ -65,7 +82,7 @@ func encode(buf *bytes.Buffer, v any) error {
 			buf.WriteString("false")
 		}
 	case json.Number:
-		return encodeNumber(buf, t)
+		return encodeNumber(buf, t, allowFloat)
 	case string:
 		encodeString(buf, t)
 	case []any:
@@ -74,7 +91,7 @@ func encode(buf *bytes.Buffer, v any) error {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			if err := encode(buf, e); err != nil {
+			if err := encode(buf, e, allowFloat); err != nil {
 				return err
 			}
 		}
@@ -95,7 +112,7 @@ func encode(buf *bytes.Buffer, v any) error {
 			}
 			encodeString(buf, k)
 			buf.WriteByte(':')
-			if err := encode(buf, t[k]); err != nil {
+			if err := encode(buf, t[k], allowFloat); err != nil {
 				return err
 			}
 		}
@@ -107,11 +124,22 @@ func encode(buf *bytes.Buffer, v any) error {
 }
 
 // encodeNumber emits an integer verbatim (its canonical decimal form is identical
-// across languages) and rejects anything with a fractional or exponent part.
-func encodeNumber(buf *bytes.Buffer, n json.Number) error {
+// across languages). A fractional/exponent number is rejected unless allowFloat
+// is set (single-row seal path only), in which case it is emitted in shortest
+// round-trip form matching the web's String(n) — this never reaches a hashed
+// shard, so byte-stability across clients is not required for it.
+func encodeNumber(buf *bytes.Buffer, n json.Number, allowFloat bool) error {
 	s := n.String()
 	if strings.ContainsAny(s, ".eE") {
-		return ErrFloat
+		if !allowFloat {
+			return ErrFloat
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return ErrFloat
+		}
+		buf.WriteString(strconv.FormatFloat(f, 'g', -1, 64))
+		return nil
 	}
 	// Confirm it is a valid integer (guards odd inputs like "+1" or leading zeros
 	// that JSON would already have rejected, but be strict regardless).

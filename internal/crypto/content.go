@@ -155,7 +155,11 @@ type sealedManifest struct {
 // object (each client re-seals with a fresh random nonce, so manifest ciphertext
 // is never byte-pinned across clients).
 func SealManifest(manifestJSON []byte, vaultKey []byte) (string, error) {
-	canon, err := canonicaljson.Canonicalize(manifestJSON)
+	// A sealed manifest's ciphertext is opaque (no cross-client hash), so it may
+	// carry the decimals a single-row store like health legitimately holds
+	// (measurement values). Sharded/hashed records use the strict Marshal path,
+	// so this tolerance never weakens a shard hash's integer-only guarantee.
+	canon, err := canonicaljson.CanonicalizeAllowFloat(manifestJSON)
 	if err != nil {
 		return "", fmt.Errorf("crypto: canonicalize manifest: %w", err)
 	}

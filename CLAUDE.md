@@ -294,10 +294,18 @@ JSON audit trail.
 - **Spec §6.1 draft said blobs carry a 1-byte suite prefix.** The shipped web +
   §17 blob-frame fixture have NO blob suite byte (spec doc `c48351b` corrected
   this). CLI matches: suite only in the manifest/KEM envelope.
-- **Float handling:** `canonicaljson` rejects all non-integer numbers (stricter
-  than the web's `String(n)`). Safe under §5.2 (dec-string coords, int duration);
-  CLI-authored records are float-free. If the web ever writes a float into a hot
-  record, shard hashes would diverge — noted, contract says it won't.
+- **Float handling (updated 2026-08-04):** the HASHED path — `canonicaljson.Marshal`,
+  used for shard buckets + collection blobs — still REJECTS non-integer numbers,
+  so hot/hashed records stay integer-only and byte-stable across clients (the
+  guard is intact). NEW: `canonicaljson.CanonicalizeAllowFloat` tolerates floats
+  (emits shortest round-trip, matching the web's `String(n)`), and
+  `crypto.SealManifest` now uses it. Rationale: a sealed manifest's ciphertext is
+  OPAQUE (no cross-client hash), and the `health` single-row module legitimately
+  carries decimal measurements (`healthEntries[].v/v2`, profile
+  `heightCm`/`weightGoalKg` — openapi `type: number`). Sharded roots are
+  float-free so they're unaffected. Conformance/§17 KATs are integer-only → the
+  change is additive and left them green. **Contract impact: none to the byte
+  contract** (opaque ciphertext only; no hashed-record or shard-hash change).
 - **ML-KEM KAT split:** Go stdlib `Encapsulate()` is not seedable and
   `dk.Bytes()` returns the 64-B seed (not the 2400-B expanded key), so the
   deterministic `ct/dk` KAT values are validated JS-side; Go pins `ekSha256`
@@ -336,6 +344,16 @@ JSON audit trail.
 
 ## 15. Changelog
 
+- 2026-08-04 feat(modules): new module engines — `internal/health` (single-row:
+  healthEntries + healthFasts + the singular healthProfile via new
+  `manifeststore.RawKey/SetRawKey`; typed views + CRUD + single-active-fast
+  invariant), plus earlier `internal/notes` + `internal/passwords` (sharded),
+  `internal/bookmarks` (single-row), the generic per-module sharded API, and full
+  `Me()` + Devices (openapi §6a). Health needed a float-tolerant seal:
+  `canonicaljson.CanonicalizeAllowFloat` + `crypto.SealManifest` now allow decimals
+  (health measurements are openapi `type: number`); the HASHED `canonicaljson.Marshal`
+  stays STRICT so shard hashes/§17 KATs are unchanged (§13). Contract impact: none
+  to the byte contract (opaque single-row ciphertext only). Full suite + conformance green.
 - 2026-08-02 feat(gallery): `gallery import --immich` — direct Immich → gallery
   import. New `internal/gallery/immich.go` (Immich REST client: `x-api-key`,
   `search/metadata` paging, `/original` download, Live-Photo pairing via

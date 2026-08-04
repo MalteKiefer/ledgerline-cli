@@ -65,6 +65,11 @@ type Store struct {
 	manifest map[string]json.RawMessage
 	base     map[string][]json.RawMessage
 	ops      []op
+
+	// rawSet holds pending writes to NON-collection top-level keys (e.g. the
+	// health module's singular "healthProfile" object), applied to the manifest at
+	// save time and preserved across a 409 rebase like ops.
+	rawSet map[string]json.RawMessage
 }
 
 // New builds a store for the given collections held in one Store v3 per-module
@@ -78,6 +83,7 @@ func New(client *api.Client, vaultKey []byte, label, module string, specs ...Col
 		module: module,
 		specs:  make(map[string]CollectionSpec, len(specs)),
 		base:   make(map[string][]json.RawMessage, len(specs)),
+		rawSet: map[string]json.RawMessage{},
 	}
 	for _, sp := range specs {
 		s.specs[sp.Key] = sp
@@ -129,12 +135,27 @@ func (s *Store) Delete(collKey, id string) {
 }
 
 // Dirty reports whether there are unsaved changes.
-func (s *Store) Dirty() bool { return len(s.ops) > 0 }
+func (s *Store) Dirty() bool { return len(s.ops) > 0 || len(s.rawSet) > 0 }
+
+// RawKey returns the current raw JSON of a NON-collection top-level manifest key
+// (e.g. health's "healthProfile"), with any pending SetRawKey applied. Returns nil
+// when absent.
+func (s *Store) RawKey(key string) json.RawMessage {
+	if v, ok := s.rawSet[key]; ok {
+		return v
+	}
+	return s.manifest[key]
+}
+
+// SetRawKey stages a write to a NON-collection top-level manifest key. The value
+// is applied verbatim at save time (and survives a 409 rebase). Passing raw=nil
+// stages deletion of the key.
+func (s *Store) SetRawKey(key string, raw json.RawMessage) { s.rawSet[key] = raw }
 
 // Save seals the manifest with all staged changes and PUTs it, retrying on a
 // version conflict by reloading and re-applying the operations.
 func (s *Store) Save(ctx context.Context) error {
-	if len(s.ops) == 0 {
+	if !s.Dirty() {
 		return nil
 	}
 	for attempt := 0; attempt < maxSaveRetries; attempt++ {
@@ -144,12 +165,13 @@ func (s *Store) Save(ctx context.Context) error {
 				if rerr := s.Load(ctx); rerr != nil {
 					return rerr
 				}
-				s.ops = ops
+				s.ops = ops // rawSet survives Load and is re-applied by the next saveOnce
 				continue
 			}
 			return err
 		}
 		s.ops = nil
+		s.rawSet = map[string]json.RawMessage{}
 		return nil
 	}
 	return fmt.Errorf("%s: manifest kept conflicting; try again", s.label)
@@ -174,6 +196,15 @@ func (s *Store) saveOnce(ctx context.Context) error {
 		s.manifest = map[string]json.RawMessage{}
 	}
 	s.manifest["v"] = json.RawMessage("3")
+
+	// Apply staged non-collection key writes (e.g. healthProfile) verbatim.
+	for key, raw := range s.rawSet {
+		if raw == nil {
+			delete(s.manifest, key)
+			continue
+		}
+		s.manifest[key] = raw
+	}
 
 	manifestJSON, err := json.Marshal(s.manifest)
 	if err != nil {
