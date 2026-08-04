@@ -25,6 +25,19 @@ type FileView struct {
 	Folder     *string // parent folder id, nil = root
 	Created    string
 	Trashed    string
+	Versions   []FileVersionView // prior versions, newest first (may be empty)
+}
+
+// FileVersionView is a typed read view of one prior file version (versions[]),
+// mirroring the openapi FileVersion schema.
+type FileVersionView struct {
+	ID         string
+	Blob       string
+	EncFileKey string
+	Size       int64
+	Mime       string
+	Name       string
+	Created    string
 }
 
 // FolderView is a typed read-only view of a folder record.
@@ -49,14 +62,32 @@ func parseFile(raw json.RawMessage) (FileView, error) {
 		Folder     *string         `json:"folder"`
 		Created    string          `json:"created"`
 		Trashed    json.RawMessage `json:"trashed"`
+		Versions   []struct {
+			ID         string          `json:"id"`
+			Blob       string          `json:"blob"`
+			EncFileKey json.RawMessage `json:"encFileKey"`
+			Size       json.Number     `json:"size"`
+			Mime       string          `json:"mime"`
+			Name       string          `json:"name"`
+			Created    string          `json:"created"`
+		} `json:"versions"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return FileView{}, err
 	}
 	size, _ := r.Size.Int64()
+	versions := make([]FileVersionView, 0, len(r.Versions))
+	for _, v := range r.Versions {
+		vsize, _ := v.Size.Int64()
+		versions = append(versions, FileVersionView{
+			ID: v.ID, Blob: v.Blob, EncFileKey: normalizeSealed(v.EncFileKey),
+			Size: vsize, Mime: v.Mime, Name: v.Name, Created: v.Created,
+		})
+	}
 	return FileView{
 		ID: r.ID, Blob: r.Blob, EncFileKey: normalizeSealed(r.EncFileKey), Name: r.Name, Mime: r.Mime,
 		Size: size, Folder: r.Folder, Created: r.Created, Trashed: interpretTrashed(r.Trashed),
+		Versions: versions,
 	}, nil
 }
 
