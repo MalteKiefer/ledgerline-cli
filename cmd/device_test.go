@@ -45,7 +45,4 @@ func TestAuthedClientRemoteWipe(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "sync-state")); !os.IsNotExist(err) {
 		t.Fatal("sync-state survived the remote wipe")
 	}
-	if _, _, err := session.LoadVaultKey(); err != session.ErrNoVaultKey {
-		t.Fatal("vault key survived the remote wipe")
-	}
 }

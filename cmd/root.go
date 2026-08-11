@@ -73,8 +73,7 @@ func NewRootCommand() *cobra.Command {
 		Short: "Command-line client for Ledgerline",
 		Long: "ledgerline-cli is a console client for a self-hosted Ledgerline server.\n\n" +
 			"Authenticate once with `auth login` (a copy/paste code from the web\n" +
-			"profile), then run commands such as `gallery upload`. Authentication is\n" +
-			"zero-knowledge: the stored token proves identity only.",
+			"profile), then run commands such as `gallery upload` and `files sync`.",
 		Version:       version.Current().Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -86,9 +85,6 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(
 		newStatusCommand(),
 		newAuthCommand(),
-		newGalleryCommand(),
-		newFilesCommand(),
-		newTodoCommand(),
 		newAuditCommand(),
 	)
 	return root
