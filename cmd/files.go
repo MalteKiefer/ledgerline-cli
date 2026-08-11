@@ -28,6 +28,7 @@ func newFilesCommand() *cobra.Command {
 		newFilesDownloadCommand(),
 		newFilesRmCommand(),
 		newFilesMkdirCommand(),
+		newFilesSyncCommand(),
 	)
 	return cmd
 }
