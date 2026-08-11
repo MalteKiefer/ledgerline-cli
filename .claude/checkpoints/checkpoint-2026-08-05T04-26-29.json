@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-08-05T04:26:29.720Z",
+  "projectRoot": "/Users/malte.kiefer/Entwicklung/ledgerline-cli",
+  "instincts": {
+    "instincts": [
+      {
+        "id": "coroutine-structured",
+        "type": "pattern",
+        "description": "Structured concurrency with viewModelScope",
+        "context": "coroutines-patterns",
+        "confidence": 1,
+        "createdAt": "2026-07-29T08:30:33.355Z",
+        "lastUsed": "2026-08-05T04:26:02.942Z",
+        "usageCount": 246
+      },
+      {
+        "id": "compose-lazy-key",
+        "type": "pattern",
+        "description": "LazyColumn/LazyRow with stable keys",
+        "context": "jetpack-compose",
+        "confidence": 1,
+        "createdAt": "2026-07-29T08:40:50.653Z",
+        "lastUsed": "2026-08-05T04:18:43.525Z",
+        "usageCount": 113
+      },
+      {
+        "id": "sealed-interface-state",
+        "type": "pattern",
+        "description": "Sealed interface for UI state",
+        "context": "mvi-architecture",
+        "confidence": 1,
+        "createdAt": "2026-07-29T08:40:50.654Z",
+        "lastUsed": "2026-08-03T04:41:46.198Z",
+        "usageCount": 16
+      }
+    ],
+    "version": "1.0",
+    "lastUpdated": "2026-08-05T04:26:02.942Z"
+  },
+  "gitBranch": "feat/gallery-immich-import",
+  "lastFiles": [
+    "CLAUDE.md",
+    "internal/canonicaljson/canonicaljson.go",
+    "internal/crypto/content.go",
+    "internal/files/records.go",
+    "internal/files/records_version_test.go",
+    "internal/health/health.go",
+    "internal/health/health_test.go",
+    "internal/manifeststore/store.go",
+    "internal/passwords/passwords.go",
+    "internal/passwords/store.go",
+    "internal/passwords/store_test.go"
+  ]
+}
