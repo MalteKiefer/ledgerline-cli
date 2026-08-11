@@ -27,7 +27,7 @@ func RunService(ctx context.Context, c *api.Client, dir string, opts SyncOptions
 	}
 
 	runOnce := func() error {
-		res, err := Sync(ctx, c, dir, opts, log)
+		res, err := Sync(ctx, c, dir, opts, log, false)
 		if err != nil {
 			if api.Status(err) == 401 {
 				return err

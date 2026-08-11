@@ -177,7 +177,7 @@ func isLoopback(host string) bool {
 type APIError struct {
 	StatusCode int
 	Message    string
-	Code       string // top-level {"error": "..."} code (e.g. version_conflict, missing_shard)
+	Code       string // top-level {"error": "..."} code (e.g. version_conflict, quota)
 	Fields     map[string][]string
 	RetryAfter time.Duration
 }

@@ -8,13 +8,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"sync/atomic"
 
 	"github.com/spf13/cobra"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
 	"github.com/MalteKiefer/ledgerline-cli/internal/gallery"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
+	"github.com/MalteKiefer/ledgerline-cli/internal/uploadledger"
 )
 
 // newGalleryCommand builds the `gallery` group.
@@ -32,9 +33,12 @@ func newGalleryCommand() *cobra.Command {
 	return cmd
 }
 
-// newGalleryUploadCommand uploads photos/videos (files or whole directories).
+// newGalleryUploadCommand uploads photos/videos (files or whole directories),
+// skipping files already uploaded (content dedup by sha256) so nothing is sent
+// twice.
 func newGalleryUploadCommand() *cobra.Command {
-	var jobs int
+	var jobs, batch int
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "upload <path...>",
 		Short: "Upload photos/videos (files or directories, recursively)",
@@ -54,10 +58,15 @@ func newGalleryUploadCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ledger, err := uploadLedger("gallery", client.BaseURL())
+			if err != nil {
+				return err
+			}
 			out := cmd.OutOrStdout()
+			bar := ui.NewProgressBar(out, len(files), ui.IsTTY(out))
 
 			var mu sync.Mutex
-			var uploaded, dup, failed int64
+			var uploaded, dup, skipped, failed, done int
 			sem := make(chan struct{}, jobs)
 			var wg sync.WaitGroup
 			for _, f := range files {
@@ -67,30 +76,55 @@ func newGalleryUploadCommand() *cobra.Command {
 					defer wg.Done()
 					defer func() { <-sem }()
 					name := gallery.GuessName(path)
+
+					// Content dedup: skip a file whose bytes were already uploaded,
+					// so a re-run of the same folder sends nothing.
+					sha, herr := uploadledger.HashFile(path)
+					if herr == nil && !force && ledger.Has(sha) {
+						mu.Lock()
+						skipped++
+						bar.Println(fmt.Sprintf("skip     %s (already uploaded)", name))
+						done++
+						bar.Update(done, name)
+						mu.Unlock()
+						return
+					}
+
 					open := func() (io.ReadCloser, error) { return os.Open(path) }
 					_, isDup, uerr := client.UploadPhoto(cmd.Context(), name, open)
 					mu.Lock()
 					defer mu.Unlock()
 					switch {
 					case uerr != nil:
-						atomic.AddInt64(&failed, 1)
-						fmt.Fprintf(out, "failed   %s: %v\n", name, uerr)
+						failed++
+						bar.Println(fmt.Sprintf("failed   %s: %v", name, uerr))
 					case isDup:
-						atomic.AddInt64(&dup, 1)
-						fmt.Fprintf(out, "duplicate %s\n", name)
+						dup++
+						bar.Println(fmt.Sprintf("duplicate %s", name))
 					default:
-						atomic.AddInt64(&uploaded, 1)
-						fmt.Fprintf(out, "uploaded %s\n", name)
+						uploaded++
+						bar.Println(fmt.Sprintf("uploaded %s", name))
 					}
+					if uerr == nil && herr == nil {
+						ledger.Add(sha)
+						_ = ledger.MaybeCheckpoint(batch)
+					}
+					done++
+					bar.Update(done, name)
 				}(f)
 			}
 			wg.Wait()
+			bar.Finish()
+			if serr := ledger.Save(); serr != nil {
+				fmt.Fprintf(out, "warning: could not save upload ledger: %v\n", serr)
+			}
 
 			auditLog().Log(audit.Event{
 				Event: "gallery.upload", Outcome: audit.OutcomeOK,
-				Count: int(uploaded + dup), Detail: fmt.Sprintf("%d new, %d duplicate, %d failed", uploaded, dup, failed),
+				Count:  uploaded + dup,
+				Detail: fmt.Sprintf("%d new, %d duplicate, %d skipped, %d failed", uploaded, dup, skipped, failed),
 			})
-			fmt.Fprintf(out, "\nDone: %d uploaded, %d duplicate, %d failed.\n", uploaded, dup, failed)
+			fmt.Fprintf(out, "Done: %d uploaded, %d duplicate, %d skipped, %d failed.\n", uploaded, dup, skipped, failed)
 			if failed > 0 {
 				return fmt.Errorf("%d file(s) failed to upload", failed)
 			}
@@ -98,6 +132,8 @@ func newGalleryUploadCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&jobs, "jobs", 4, "number of concurrent uploads")
+	cmd.Flags().IntVar(&batch, "batch", 50, "checkpoint the dedup ledger every N uploads (0 disables)")
+	cmd.Flags().BoolVar(&force, "force", false, "upload even files already recorded as uploaded")
 	return cmd
 }
 

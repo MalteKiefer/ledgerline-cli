@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
 
 // Conflict policies for a file changed on both sides.
@@ -45,8 +46,9 @@ type SyncResult struct {
 // deletes on either side (safe by default: with no persisted last-seen state a
 // missing file is indistinguishable from a deletion). It pushes files that are
 // new/changed locally, pulls files that are new/changed remotely, and resolves a
-// both-sides change by opts.Conflict. Progress lines go to log.
-func Sync(ctx context.Context, c *api.Client, localDir string, opts SyncOptions, log io.Writer) (SyncResult, error) {
+// both-sides change by opts.Conflict. Per-file lines and an in-place progress bar
+// (when progress is true and w is a terminal) are written to w.
+func Sync(ctx context.Context, c *api.Client, localDir string, opts SyncOptions, w io.Writer, progress bool) (SyncResult, error) {
 	if opts.Direction == "" {
 		opts.Direction = DirectionBoth
 	}
@@ -69,65 +71,71 @@ func Sync(ctx context.Context, c *api.Client, localDir string, opts SyncOptions,
 	pushOK := opts.Direction == DirectionBoth || opts.Direction == DirectionPush
 	pullOK := opts.Direction == DirectionBoth || opts.Direction == DirectionPull
 
-	// Local → remote (push new / changed).
 	relPaths := make([]string, 0, len(local))
 	for rel := range local {
 		relPaths = append(relPaths, rel)
 	}
 	sort.Strings(relPaths)
+	remotePaths := make([]string, 0, len(rm.fileByPath))
+	for rel := range rm.fileByPath {
+		if _, ok := local[rel]; !ok {
+			remotePaths = append(remotePaths, rel)
+		}
+	}
+	sort.Strings(remotePaths)
+
+	bar := ui.NewProgressBar(w, len(relPaths)+len(remotePaths), progress && ui.IsTTY(w))
+	done := 0
+	step := func(label string) { done++; bar.Update(done, label) }
+
+	// Local → remote (push new / changed).
 	for _, rel := range relPaths {
 		le := local[rel]
 		re, onRemote := rm.fileByPath[rel]
 		switch {
 		case !onRemote:
-			if !pushOK {
-				continue
-			}
-			if err := rm.pushNew(ctx, c, localDir, rel, log); err != nil {
-				res.Failed++
-				fmt.Fprintf(log, "failed   push %s: %v\n", rel, err)
-			} else {
-				res.Pushed++
-				fmt.Fprintf(log, "pushed   %s\n", rel)
+			if pushOK {
+				if err := rm.pushNew(ctx, c, localDir, rel); err != nil {
+					res.Failed++
+					bar.Println(fmt.Sprintf("failed   push %s: %v", rel, err))
+				} else {
+					res.Pushed++
+					bar.Println(fmt.Sprintf("pushed   %s", rel))
+				}
 			}
 		case sameContent(le, re):
 			// unchanged
 		default:
-			resolveConflict(ctx, c, localDir, rel, le, re, opts, pushOK, pullOK, &res, log)
+			resolveConflict(ctx, c, localDir, rel, le, re, opts, pushOK, pullOK, &res, bar)
 		}
+		step(rel)
 	}
 
 	// Remote → local (pull files not present locally).
 	if pullOK {
-		remotePaths := make([]string, 0, len(rm.fileByPath))
-		for rel := range rm.fileByPath {
-			remotePaths = append(remotePaths, rel)
-		}
-		sort.Strings(remotePaths)
 		for _, rel := range remotePaths {
-			if _, ok := local[rel]; ok {
-				continue // handled in the push loop
-			}
 			re := rm.fileByPath[rel]
 			if err := pullTo(ctx, c, localDir, rel, re.ID); err != nil {
 				res.Failed++
-				fmt.Fprintf(log, "failed   pull %s: %v\n", rel, err)
+				bar.Println(fmt.Sprintf("failed   pull %s: %v", rel, err))
 			} else {
 				res.Pulled++
-				fmt.Fprintf(log, "pulled   %s\n", rel)
+				bar.Println(fmt.Sprintf("pulled   %s", rel))
 			}
+			step(rel)
 		}
 	}
+	bar.Finish()
 	return res, nil
 }
 
 // resolveConflict handles a file that differs on both sides per opts.Conflict.
-func resolveConflict(ctx context.Context, c *api.Client, localDir, rel string, le localEntry, re api.FileEntry, opts SyncOptions, pushOK, pullOK bool, res *SyncResult, log io.Writer) {
+func resolveConflict(ctx context.Context, c *api.Client, localDir, rel string, le localEntry, re api.FileEntry, opts SyncOptions, pushOK, pullOK bool, res *SyncResult, bar *ui.ProgressBar) {
 	res.Conflicts++
 	switch opts.Conflict {
 	case ConflictSkip:
 		res.Skipped++
-		fmt.Fprintf(log, "conflict %s (skipped)\n", rel)
+		bar.Println(fmt.Sprintf("conflict %s (skipped)", rel))
 	case ConflictKeepBoth:
 		if !pullOK {
 			res.Skipped++
@@ -136,23 +144,23 @@ func resolveConflict(ctx context.Context, c *api.Client, localDir, rel string, l
 		alt := suffixName(rel, "remote")
 		if err := pullTo(ctx, c, localDir, alt, re.ID); err != nil {
 			res.Failed++
-			fmt.Fprintf(log, "failed   keep-both %s: %v\n", rel, err)
+			bar.Println(fmt.Sprintf("failed   keep-both %s: %v", rel, err))
 			return
 		}
-		fmt.Fprintf(log, "conflict %s (kept remote as %s)\n", rel, alt)
+		bar.Println(fmt.Sprintf("conflict %s (kept remote as %s)", rel, alt))
 	default: // ConflictNewest
 		if localNewer(le, re) {
 			if !pushOK {
 				res.Skipped++
 				return
 			}
-			if err := replaceRemote(ctx, c, localDir, rel, re.ID, log); err != nil {
+			if err := replaceRemote(ctx, c, localDir, rel, re.ID); err != nil {
 				res.Failed++
-				fmt.Fprintf(log, "failed   push %s: %v\n", rel, err)
+				bar.Println(fmt.Sprintf("failed   push %s: %v", rel, err))
 				return
 			}
 			res.Pushed++
-			fmt.Fprintf(log, "pushed   %s (newer local)\n", rel)
+			bar.Println(fmt.Sprintf("pushed   %s (newer local)", rel))
 		} else {
 			if !pullOK {
 				res.Skipped++
@@ -160,11 +168,11 @@ func resolveConflict(ctx context.Context, c *api.Client, localDir, rel string, l
 			}
 			if err := pullTo(ctx, c, localDir, rel, re.ID); err != nil {
 				res.Failed++
-				fmt.Fprintf(log, "failed   pull %s: %v\n", rel, err)
+				bar.Println(fmt.Sprintf("failed   pull %s: %v", rel, err))
 				return
 			}
 			res.Pulled++
-			fmt.Fprintf(log, "pulled   %s (newer remote)\n", rel)
+			bar.Println(fmt.Sprintf("pulled   %s (newer remote)", rel))
 		}
 	}
 }
@@ -308,7 +316,7 @@ func (rm *remoteModel) ensureFolder(ctx context.Context, c *api.Client, dir stri
 }
 
 // pushNew uploads a local file that has no remote counterpart.
-func (rm *remoteModel) pushNew(ctx context.Context, c *api.Client, localDir, rel string, log io.Writer) error {
+func (rm *remoteModel) pushNew(ctx context.Context, c *api.Client, localDir, rel string) error {
 	dir := path.Dir(rel)
 	if dir == "." {
 		dir = ""
@@ -329,7 +337,7 @@ func (rm *remoteModel) pushNew(ctx context.Context, c *api.Client, localDir, rel
 
 // --- shared helpers ---
 
-func replaceRemote(ctx context.Context, c *api.Client, localDir, rel string, id int64, log io.Writer) error {
+func replaceRemote(ctx context.Context, c *api.Client, localDir, rel string, id int64) error {
 	abs := filepath.Join(localDir, filepath.FromSlash(rel))
 	open := func() (io.ReadCloser, error) { return os.Open(abs) }
 	_, err := c.ReplaceFileContent(ctx, id, path.Base(rel), open)

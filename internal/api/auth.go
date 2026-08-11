@@ -160,7 +160,7 @@ func (c *Client) RevokeDevice(ctx context.Context, id int64) error {
 }
 
 // WipeDevice flags a device for remote wipe: its next /me or /device/heartbeat
-// returns wipe=true, prompting that client to erase local vault data and log out.
+// returns wipe=true, prompting that client to erase local data and log out.
 func (c *Client) WipeDevice(ctx context.Context, id int64) error {
 	return c.request(ctx, "POST", "/api/v1/devices/"+strconv.FormatInt(id, 10)+"/wipe", nil, nil)
 }

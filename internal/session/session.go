@@ -1,8 +1,7 @@
 // Package session persists the durable credential obtained from `auth login`.
 //
-// The design mirrors the Android client: authentication (a first-party Sanctum
-// bearer) is kept entirely separate from any future vault master key. Only the
-// bearer and a little non-secret identity live here.
+// The design mirrors the Android client: only the first-party Sanctum bearer and
+// a little non-secret identity (server URL, user id/name/email) live here.
 //
 // Storage is layered for security:
 //

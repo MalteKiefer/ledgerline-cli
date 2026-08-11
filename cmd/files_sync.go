@@ -65,7 +65,7 @@ func newFilesSyncCommand() *cobra.Command {
 				return serr
 			}
 
-			res, err := files.Sync(cmd.Context(), client, dir, opts, out)
+			res, err := files.Sync(cmd.Context(), client, dir, opts, out, true)
 			if err != nil {
 				return err
 			}

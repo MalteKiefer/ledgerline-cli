@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
@@ -10,6 +11,7 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/certpin"
 	"github.com/MalteKiefer/ledgerline-cli/internal/config"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
+	"github.com/MalteKiefer/ledgerline-cli/internal/uploadledger"
 )
 
 // auditOnce lazily opens the shared audit logger under the config directory.
@@ -47,6 +49,18 @@ func newAPIClient(server string, opts ...api.Option) (*api.Client, error) {
 	}
 	opts = append(opts, api.WithCertPinner(certpin.NewStore(dir)))
 	return api.New(server, opts...)
+}
+
+// uploadLedger opens the per-server upload dedup ledger for a module
+// ("gallery"/"files"), stored under the config directory. A resolution failure
+// yields an in-memory-only ledger (path "") so uploads still work, just without
+// cross-run dedup.
+func uploadLedger(kind, server string) (*uploadledger.Ledger, error) {
+	dir, err := config.Dir()
+	if err != nil {
+		return uploadledger.Open("", server)
+	}
+	return uploadledger.Open(filepath.Join(dir, "uploads-"+kind+".json"), server)
 }
 
 // authedClient loads the stored session, builds an authenticated client, and

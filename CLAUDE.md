@@ -84,10 +84,11 @@ cmd/                    command tree: root, status, auth, audit, gallery, files 
 internal/api/           typed /api/v1 client: transport (client.go), auth, gallery, files, multipart helper
 internal/gallery/       local helpers: media-file walking, upload naming
 internal/files/         local helpers: folder-tree render (tree.go) + two-way sync (sync.go) + watch service (watch.go)
+internal/uploadledger/  per-server sha256 dedup ledger (skip re-uploading known bytes)
 internal/session/       durable credential (OS keychain + 0600 file fallback)
 internal/certpin/       TOFU certificate pinning
 internal/audit/         local JSONL operation audit trail (0600, rotated, no secrets)
-internal/config/ settings/ ui/ version/
+internal/config/ ui/ version/
 ```
 
 Transport (`internal/api/client.go`) is the reuse seam: TLS 1.3, cert pinning,
@@ -116,6 +117,12 @@ Stdlib only for hashing (`crypto/sha256` for the sync content compare), transpor
 - **Bearer token:** secret. OS keyring or 0600 file fallback; never argv/env/logs.
 - **Content (photos/files):** plaintext. Upload: open file → stream multipart →
   server stores plaintext + derives metadata. Download: stream raw bytes to disk.
+- **Upload dedup:** each upload command hashes files (sha256) and skips ones
+  already sent — gallery via a local per-server ledger (`internal/uploadledger`,
+  `<config>/uploads-gallery.json`); files via the server's `sha256` (authoritative,
+  cross-host) plus the same ledger. `--force` bypasses it; `--batch N` checkpoints
+  the ledger every N uploads. Uploads and a single `sync` pass show an in-place
+  progress bar on a TTY (plain per-line output when piped).
 - **Sync state:** the sync compares by sha256 (local, computed on the fly) vs the
   server-reported `sha256`; no persisted last-seen state, so deletions are never
   propagated (a missing file is never treated as a delete — safe by default).
@@ -164,6 +171,13 @@ audit show|path|purge             local audit trail
 
 ## 10. Changelog
 
+- 2026-08-11 feat: upload **content-dedup** (sha256) + progress bars. New
+  `internal/uploadledger` (per-server hash ledger, `--batch` checkpoint, `--force`
+  bypass); `gallery upload` skips already-sent bytes via the ledger, `files upload`
+  via the server `sha256` + ledger; `files sync` already no-ops identical content.
+  Uploads and a single `files sync` show an in-place progress bar on a TTY
+  (`ui.IsTTY`). Removed the now-orphaned `internal/settings` package and the last
+  ZK-vocabulary code comments.
 - 2026-08-11 feat: **plaintext rewrite, gallery + files only.** Deleted the entire
   ZK stack (`crypto`, `canonicaljson`, `shard`, `vault`, `blobcache`,
   `manifeststore`, `conformance`, `ml`), all non-gallery/files modules

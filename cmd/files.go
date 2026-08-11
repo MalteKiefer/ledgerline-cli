@@ -14,6 +14,8 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
+	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
+	"github.com/MalteKiefer/ledgerline-cli/internal/uploadledger"
 )
 
 // newFilesCommand builds the `files` group.
@@ -34,9 +36,12 @@ func newFilesCommand() *cobra.Command {
 }
 
 // newFilesUploadCommand uploads files into a folder (flat; sync handles trees).
+// It skips a file whose bytes already exist on the server (remote sha256) or were
+// already uploaded from this host, so nothing is sent twice.
 func newFilesUploadCommand() *cobra.Command {
 	var folder int64
-	var jobs int
+	var jobs, batch int
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "upload <file...>",
 		Short: "Upload files into a folder (--folder; root by default)",
@@ -53,17 +58,37 @@ func newFilesUploadCommand() *cobra.Command {
 			if cmd.Flags().Changed("folder") {
 				folderPtr = &folder
 			}
+			ledger, err := uploadLedger("files", client.BaseURL())
+			if err != nil {
+				return err
+			}
+			// Authoritative remote content index: skip a file already on the server
+			// even from a fresh host. Best-effort — an error just falls back to the
+			// local ledger + server-side dedup.
+			remoteSha := map[string]bool{}
+			if !force {
+				if _, entries, _, derr := client.FilesData(cmd.Context()); derr == nil {
+					for _, e := range entries {
+						if e.Sha256 != nil {
+							remoteSha[*e.Sha256] = true
+						}
+					}
+				}
+			}
 			out := cmd.OutOrStdout()
+			bar := ui.NewProgressBar(out, len(args), ui.IsTTY(out))
 
 			var mu sync.Mutex
-			var ok, failed int
+			var ok, skipped, failed, done int
 			sem := make(chan struct{}, jobs)
 			var wg sync.WaitGroup
 			for _, path := range args {
 				if info, serr := os.Stat(path); serr != nil || info.IsDir() {
 					mu.Lock()
 					failed++
-					fmt.Fprintf(out, "skip     %s (not a regular file)\n", path)
+					done++
+					bar.Println(fmt.Sprintf("skip     %s (not a regular file)", path))
+					bar.Update(done, path)
 					mu.Unlock()
 					continue
 				}
@@ -73,23 +98,49 @@ func newFilesUploadCommand() *cobra.Command {
 					defer wg.Done()
 					defer func() { <-sem }()
 					name := filepath.Base(p)
+
+					sha, herr := uploadledger.HashFile(p)
+					if herr == nil && !force && (remoteSha[sha] || ledger.Has(sha)) {
+						mu.Lock()
+						skipped++
+						bar.Println(fmt.Sprintf("skip     %s (already uploaded)", name))
+						ledger.Add(sha)
+						done++
+						bar.Update(done, name)
+						mu.Unlock()
+						return
+					}
+
 					open := func() (io.ReadCloser, error) { return os.Open(p) }
 					_, uerr := client.UploadFile(cmd.Context(), name, folderPtr, open)
 					mu.Lock()
 					defer mu.Unlock()
 					if uerr != nil {
 						failed++
-						fmt.Fprintf(out, "failed   %s: %v\n", name, uerr)
-						return
+						bar.Println(fmt.Sprintf("failed   %s: %v", name, uerr))
+					} else {
+						ok++
+						bar.Println(fmt.Sprintf("uploaded %s", name))
+						if herr == nil {
+							ledger.Add(sha)
+							_ = ledger.MaybeCheckpoint(batch)
+						}
 					}
-					ok++
-					fmt.Fprintf(out, "uploaded %s\n", name)
+					done++
+					bar.Update(done, name)
 				}(path)
 			}
 			wg.Wait()
+			bar.Finish()
+			if serr := ledger.Save(); serr != nil {
+				fmt.Fprintf(out, "warning: could not save upload ledger: %v\n", serr)
+			}
 
-			auditLog().Log(audit.Event{Event: "files.upload", Outcome: audit.OutcomeOK, Count: ok})
-			fmt.Fprintf(out, "\nDone: %d uploaded, %d failed.\n", ok, failed)
+			auditLog().Log(audit.Event{
+				Event: "files.upload", Outcome: audit.OutcomeOK, Count: ok,
+				Detail: fmt.Sprintf("%d uploaded, %d skipped, %d failed", ok, skipped, failed),
+			})
+			fmt.Fprintf(out, "Done: %d uploaded, %d skipped, %d failed.\n", ok, skipped, failed)
 			if failed > 0 {
 				return fmt.Errorf("%d file(s) failed to upload", failed)
 			}
@@ -98,6 +149,8 @@ func newFilesUploadCommand() *cobra.Command {
 	}
 	cmd.Flags().Int64Var(&folder, "folder", 0, "destination folder id (default: root)")
 	cmd.Flags().IntVar(&jobs, "jobs", 4, "number of concurrent uploads")
+	cmd.Flags().IntVar(&batch, "batch", 50, "checkpoint the dedup ledger every N uploads (0 disables)")
+	cmd.Flags().BoolVar(&force, "force", false, "upload even files already present on the server")
 	return cmd
 }
 

@@ -7,10 +7,26 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
+
+// IsTTY reports whether w is an interactive terminal (a character device), so
+// callers can enable in-place animation only when it will not corrupt piped or
+// redirected output. It needs no external dependency.
+func IsTTY(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
 
 // Prompt writes label to out and reads a single trimmed line from in. An empty
 // line returns the empty string; callers decide whether that is acceptable.

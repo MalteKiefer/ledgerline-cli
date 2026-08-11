@@ -75,7 +75,7 @@ func TestSyncPushesNewLocalFile(t *testing.T) {
 	srv := httptest.NewServer(ss.handler(t))
 	defer srv.Close()
 
-	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{}, io.Discard)
+	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{}, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestSyncPullsRemoteOnlyFile(t *testing.T) {
 	srv := httptest.NewServer(ss.handler(t))
 	defer srv.Close()
 
-	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{}, io.Discard)
+	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{}, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestSyncNoOpOnEqualContent(t *testing.T) {
 	srv := httptest.NewServer(ss.handler(t))
 	defer srv.Close()
 
-	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{}, io.Discard)
+	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{}, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestSyncConflictSkip(t *testing.T) {
 	srv := httptest.NewServer(ss.handler(t))
 	defer srv.Close()
 
-	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{Conflict: ConflictSkip}, io.Discard)
+	res, err := Sync(context.Background(), newClient(t, srv), dir, SyncOptions{Conflict: ConflictSkip}, io.Discard, false)
 	if err != nil {
 		t.Fatal(err)
 	}
