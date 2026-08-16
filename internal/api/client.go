@@ -180,6 +180,10 @@ type APIError struct {
 	Code       string // top-level {"error": "..."} code (e.g. version_conflict, quota)
 	Fields     map[string][]string
 	RetryAfter time.Duration
+	// Version is the server's current row version on a 409 version_conflict body
+	// (Code == "version_conflict"); the caller should re-fetch, merge and retry
+	// with this version. Zero when not applicable.
+	Version int
 }
 
 // Error implements error.
@@ -388,11 +392,13 @@ func decodeError(resp *http.Response) error {
 		Message string              `json:"message"`
 		Error   string              `json:"error"`
 		Errors  map[string][]string `json:"errors"`
+		Version int                 `json:"version"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil {
 		apiErr.Message = envelope.Message
 		apiErr.Code = envelope.Error
 		apiErr.Fields = envelope.Errors
+		apiErr.Version = envelope.Version
 	}
 	return apiErr
 }

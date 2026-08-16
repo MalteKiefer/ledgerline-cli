@@ -107,17 +107,76 @@ func (c *Client) DeleteFile(ctx context.Context, id int64) error {
 	return c.request(ctx, "DELETE", "/api/v1/files/entries/"+strconv.FormatInt(id, 10), nil, nil)
 }
 
-// CreateFolder creates a folder under parentID (nil = root). POST /files/folders.
-func (c *Client) CreateFolder(ctx context.Context, name string, parentID *int64) (FileFolder, error) {
-	body := map[string]any{"name": name}
-	if parentID != nil {
-		body["parent_id"] = *parentID
+// FileUpdate is the partial-update body for UpdateFile: only non-nil fields are
+// sent. FolderID uses a nested pointer so "move to root" (JSON null) is
+// distinguishable from "leave the folder unchanged" (field omitted).
+type FileUpdate struct {
+	Name     *string
+	FolderID **int64
+	Tags     *[]string
+	Note     **string
+	Favorite *bool
+}
+
+// UpdateFile renames/moves/tags/notes/favorites a file under optimistic
+// concurrency: version must match the row's current FileEntry.Version. On a
+// mismatch it returns an *APIError with Code "version_conflict" and Version set
+// to the row's current version; re-fetch, merge and retry.
+// PUT /files/entries/{id}.
+func (c *Client) UpdateFile(ctx context.Context, id int64, u FileUpdate, version int) (FileEntry, error) {
+	body := map[string]any{"version": version}
+	if u.Name != nil {
+		body["name"] = *u.Name
+	}
+	if u.FolderID != nil {
+		body["file_folder_id"] = *u.FolderID // may itself be nil -> JSON null (move to root)
+	}
+	if u.Tags != nil {
+		body["tags"] = *u.Tags
+	}
+	if u.Note != nil {
+		body["note"] = *u.Note // may itself be nil -> JSON null (clear note)
+	}
+	if u.Favorite != nil {
+		body["favorite"] = *u.Favorite
 	}
 	var resp struct {
-		Folder FileFolder `json:"folder"`
+		File FileEntry `json:"file"`
 	}
-	if err := c.request(ctx, "POST", "/api/v1/files/folders", body, &resp); err != nil {
-		return FileFolder{}, err
+	path := "/api/v1/files/entries/" + strconv.FormatInt(id, 10)
+	if err := c.request(ctx, "PUT", path, body, &resp); err != nil {
+		return FileEntry{}, err
 	}
-	return resp.Folder, nil
+	return resp.File, nil
+}
+
+// ToggleFileFavorite sets a file's favorite flag. POST /files/entries/{id}/toggle.
+func (c *Client) ToggleFileFavorite(ctx context.Context, id int64, favorite bool) (FileEntry, error) {
+	body := map[string]any{"field": "favorite", "value": favorite}
+	var resp struct {
+		File FileEntry `json:"file"`
+	}
+	path := "/api/v1/files/entries/" + strconv.FormatInt(id, 10) + "/toggle"
+	if err := c.request(ctx, "POST", path, body, &resp); err != nil {
+		return FileEntry{}, err
+	}
+	return resp.File, nil
+}
+
+// CopyFile duplicates a file's bytes + row into folderID (nil = the file's own
+// folder). The server appends a "(copy)" suffix to the name.
+// POST /files/entries/{id}/copy.
+func (c *Client) CopyFile(ctx context.Context, id int64, folderID *int64) (FileEntry, error) {
+	var body any
+	if folderID != nil {
+		body = map[string]any{"file_folder_id": *folderID}
+	}
+	var resp struct {
+		File FileEntry `json:"file"`
+	}
+	path := "/api/v1/files/entries/" + strconv.FormatInt(id, 10) + "/copy"
+	if err := c.request(ctx, "POST", path, body, &resp); err != nil {
+		return FileEntry{}, err
+	}
+	return resp.File, nil
 }

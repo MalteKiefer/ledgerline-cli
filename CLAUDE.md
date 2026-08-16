@@ -36,25 +36,52 @@ Base path `/api/v1`. All calls carry a Sanctum bearer (`Authorization: Bearer �
 - `GET /devices`, `DELETE /devices/{id}`, `POST /devices/{id}/wipe`,
   `POST /device/heartbeat`, `DELETE /auth/session` (logout).
 
-**Gallery** (`internal/api/gallery.go`):
+**Files — fully wrapped (2026-08-16).** Unlike gallery, every `Files`-tagged
+openapi operation (v1.671.0) has a typed Go method, split by feature area under
+`internal/api/files*.go`, so the package works standalone as the API library for
+a future GTK desktop sync client (Nextcloud-desktop-shaped: browse, two-way
+sync, trash/restore, version conflicts, sharing) — not just the CLI's own
+subset. `internal/api/files.go` (core CRUD: data/upload/replace/download/
+delete/update/toggle-favorite/copy) plus:
+- `files_folders.go` — folder CRUD, move (cycle-guarded), trash/restore/force-delete.
+- `files_trash.go` — trash listing, file restore/force-delete, empty-trash.
+- `files_versions.go` — version history list/download/restore.
+- `files_labels.go` — coloured label CRUD + per-file label set.
+- `files_activity.go` — activity feed (global/per-file), show, rich info panel, search, stats.
+- `files_chunked.go` — chunked-upload session (init/part/complete/abort) +
+  `UploadFileChunked` convenience wrapper for large files.
+- `files_shares.go` — public share links, internal (viewer/editor) folder
+  shares, inbound upload links, shared-with-me browse/upload/rename/delete.
+- `files_archive.go` — ZIP export, create-archive (zip/tar.gz/tar.xz/7z), extract-archive.
+- `files_crypto.go` — PGP/S-MIME encrypt/decrypt a file, encrypt a folder, keyring read.
+
+`GET /files/data` → `{folders,files,labels,usage}` remains the one-shot listing
+the CLI's `ls`/`sync`/upload-dedup paths use. `PUT /files/entries/{id}` and
+`PUT /files/rel-shares/{id}` are optimistic-concurrency (body carries `version`;
+a 409 body is `{error:"version_conflict",version:N}`, decoded onto
+`APIError.Version` — re-fetch, merge, retry with the new version).
+
+Not wrapped (genuinely out of scope, not "Files" tag): `/mounts/*` (S3/SFTP
+external storage — a separate feature), `/crypto/keys*` and
+`/crypto/recipients` (own-key generation/import/recipient management — the
+`files_crypto.go` wrapper only reads the keyring to resolve a `key_id`), the
+public no-auth upload-link consumption endpoint (`/upload-link/{token}`, for
+external anonymous uploaders, not this account), `/invoices/ocr` (Finance
+module, unrelated).
+
+**Gallery** (`internal/api/gallery.go`) stays minimal — unchanged from the
+plaintext pivot:
 - `GET /gallery/data` → `{photos:[GalleryPhoto]}` (list, no bytes).
 - `POST /gallery` (multipart `file`) → `{photo}`; HTTP 200 + `duplicate:true` on a
   sha256 match, 201 on a new row.
 - `GET /gallery/{id}/download?variant=original|edited` → raw bytes.
 - `DELETE /gallery/{id}` (soft delete) / `POST /gallery/bulk-destroy {ids}`.
 
-**Files** (`internal/api/files.go`):
-- `GET /files/data` → `{folders,files,labels,usage}`.
-- `POST /files/entries` (multipart `file` + optional `file_folder_id`,`name`) → `{file}`.
-- `POST /files/entries/{id}/content` (multipart) — replace bytes, archives a version.
-- `GET /files/entries/{id}/raw?download=1` → raw bytes.
-- `DELETE /files/entries/{id}` (soft delete).
-- `POST /files/folders {name,parent_id}` → `{folder}`.
-
-Endpoints the API exposes but the CLI deliberately does NOT consume (out of the
-minimal capability surface): albums, favorite/toggle, trash/restore/empty,
-force-delete, file versions list/restore, folder move/rename/copy, chunked
-upload, people/faces, semantic search, shares, upload-links, labels.
+Endpoints the gallery API exposes but the CLI deliberately does NOT consume:
+albums, favorite/toggle, trash/restore/empty, force-delete, people/faces,
+semantic search, shares. (Files' equivalents are now wrapped; gallery's
+capability floor is unchanged — widen it the same way, feature-file by
+feature-file, if a concrete need arises.)
 
 ## 3. Threat model & trust boundaries
 
@@ -80,8 +107,11 @@ compiled-in secrets.
 ## 4. Architecture & module map
 
 ```
-cmd/                    command tree: root, status, auth, audit, gallery, files (+ files sync)
-internal/api/           typed /api/v1 client: transport (client.go), auth, gallery, files, multipart helper
+cmd/                    command tree: root, status, auth, audit, gallery, files (upload/ls/download/rm/
+                        mkdir/sync + rename/mv/copy/folder/trash/versions/labels/search/stats/activity)
+internal/api/           typed /api/v1 client: transport (client.go), auth, gallery, multipart helper;
+                        files split by feature — files.go (core CRUD) + files_folders/trash/versions/
+                        labels/activity/chunked/shares/archive/crypto.go (full Files-tag surface, §2)
 internal/gallery/       local helpers: media-file walking, upload naming
 internal/files/         local helpers: folder-tree render (tree.go) + two-way sync (sync.go) + watch service (watch.go)
 internal/uploadledger/  per-server sha256 dedup ledger (skip re-uploading known bytes)
@@ -142,20 +172,43 @@ gallery rm <id...>                trash (bulk when >1)
 files upload <file...>            multipart upload (--folder, --jobs)
 files ls                          folder/file tree + usage
 files download <id...>            raw bytes (--out)
-files rm <id...>                  trash
+files rm <id...>                  trash a file
 files mkdir <name>                create folder (--parent)
 files sync <dir>                  two-way sync (--direction, --conflict, --interval, --service)
+files rename <id> <name>          rename a file
+files mv <id...>                  move files (--to <folder-id> | --root)
+files copy <id>                   duplicate a file (--to <folder-id>)
+files folder rename|mv|rm|restore folder rename/move/trash(+--force)/restore
+files trash ls|restore|rm|empty   trashed files+folders (rm/empty are permanent)
+files versions ls|download|restore <file-id> [version]   version history
+files labels ls|create|rm|set     coloured labels + per-file label set
+files search <query>              full-text/OCR search
+files stats                       usage by type + suspected duplicates
+files activity [--file <id>]      Files activity feed
 audit show|path|purge             local audit trail
 ```
 
+Deliberately CLI-less (available only as `internal/api` Go methods — sharing,
+encryption, archives, chunked upload and the rest of the Files-tag surface;
+see §2 for the full list). A future GTK desktop sync client is the intended
+consumer for those; add a CLI command for one only if a concrete CLI need
+shows up.
+
 ## 8. Open items  [LIVING]
 
-- The wider gallery/files API (albums, versions, favorites, trash management,
-  shares, chunked upload, ML/faces/search) is intentionally not wrapped — the CLI
-  is a minimal capability floor. Add wrappers only when a concrete need arises.
+- The wider gallery API (albums, versions, favorites, trash management, shares,
+  chunked upload, ML/faces/search) is intentionally not wrapped — gallery stays
+  a minimal capability floor. Files was widened in full (§2); do the same for
+  gallery, feature-file by feature-file, only when a concrete need arises.
 - `files sync` propagates no deletions and keeps no last-seen state; that is a
   deliberate safety choice, not a bug. A stateful three-way sync (with delete
   propagation) would be a separate, carefully-reviewed feature.
+- The full `internal/api` Files surface (§2) has no CLI command for sharing,
+  encryption, archives or chunked upload by design (§7) — it exists for a
+  future GTK desktop sync client to import as a library. That GTK app itself
+  does not exist yet in this repo; `internal/files` (tree render + sync engine)
+  is local-CLI-only today and would need a GUI-facing layer (progress/conflict
+  callbacks instead of stdout/a progress bar) when that client is built.
 - CI-infra items inherited from before the pivot (SBOM/reproducible-build/signed
   commits) are org-policy, not in the repo tree.
 
@@ -171,6 +224,21 @@ audit show|path|purge             local audit trail
 
 ## 10. Changelog
 
+- 2026-08-16 feat: **full Files-tag API surface + sync-core CLI**, as the Go
+  library base for a future GTK desktop sync client. `internal/api` now wraps
+  every `Files`-tagged openapi operation (v1.671.0; see §2), split across
+  `files_folders/trash/versions/labels/activity/chunked/shares/archive/
+  crypto.go`; `UpdateFile`/`UpdateFileShare` are optimistic-concurrency
+  (`APIError.Version` decodes a 409's `version` for retry). New CLI commands
+  for the Nextcloud-client-relevant core: `files rename|mv|copy`, `files
+  folder`, `files trash`, `files versions`, `files labels`, `files search`,
+  `files stats`, `files activity` (§7); sharing/encryption/archives/chunked
+  upload are library-only by design. Also: `git clean`ed a pile of untracked
+  pre-pivot files left on disk by earlier `git rm` commits (old ZK GTK GUI,
+  crypto/notes/passwords/health/bookmarks/todo/vault/shard/ml packages, the
+  old Immich importer, stale `files_ls.go`/`files_rm.go`/`files_open.go`) that
+  had been silently breaking `go build ./...`; the repo now matches what §1
+  and this changelog document. Full suite + `-race` green.
 - 2026-08-11 feat: upload **content-dedup** (sha256) + progress bars. New
   `internal/uploadledger` (per-server hash ledger, `--batch` checkpoint, `--force`
   bypass); `gallery upload` skips already-sent bytes via the ledger, `files upload`

@@ -4,7 +4,7 @@
   "specVersion": "1.6",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-24T10:37:46+02:00",
+    "timestamp": "2026-08-16T04:12:45+02:00",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -13,23 +13,23 @@
         "hashes": [
           {
             "alg": "MD5",
-            "content": "34be59c1934f4e22f22eadc27dc211d5"
+            "content": "d80137c4b3bc0705b256a99e51929ed7"
           },
           {
             "alg": "SHA-1",
-            "content": "6152f70aa40043df7c7be029adb8f5b7fc657aec"
+            "content": "c7710e3d00df947d68cc3b53e12ea1445d68c3f9"
           },
           {
             "alg": "SHA-256",
-            "content": "2cb593e2291911ae7fd90de4658ea421a4fd9529010aac08042b2b0f67ea1573"
+            "content": "64aec5fbfa0557254ab258785046d3216a30cacf747d64d5736585a73823c3d1"
           },
           {
             "alg": "SHA-384",
-            "content": "fe23e715b75378d04a45024d707db95be49963d52df67f6d80d7c58440708e4f08b38b4cc7ed4fab72efcb9e60d97714"
+            "content": "ca50ec5c3a4ea4f18c7e646d2ac34f10a78b20ab8f3e9ab4a1f15d0501aa86abe2c0c0f60df2f0c3186da2c44d503ce1"
           },
           {
             "alg": "SHA-512",
-            "content": "d1cf1b37dbdbc47cbb2654f2a30f04094b82f765a30238e6c0a66305c2c97d09508d4629e146ac174f2dd6beac1e220c380fab7b9c9eb5cecf94a6d47e2b12e9"
+            "content": "b27ebecec08d68a23495d98b8024b39c518b4afa64be3ce7a96ed796ac88a3924dac3155b505cc75eb37e46c9ca0dfe636b0343882aba5932378d5f8f33e08fa"
           }
         ],
         "externalReferences": [
@@ -45,11 +45,11 @@
       }
     ],
     "component": {
-      "bom-ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.4-0.20260722062715-f1e27e127b7f?type=module",
+      "bom-ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.5-0.20260724084006-e762a166e688?type=module",
       "type": "application",
       "name": "github.com/MalteKiefer/ledgerline-cli",
-      "version": "v0.7.4-0.20260722062715-f1e27e127b7f",
-      "purl": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.4-0.20260722062715-f1e27e127b7f?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "version": "v0.7.5-0.20260724084006-e762a166e688",
+      "purl": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.5-0.20260724084006-e762a166e688?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/MalteKiefer/ledgerline-cli",
@@ -80,7 +80,7 @@
           "content": "bfb7590b6c77d94b779c47d11febe1a191af37bdbe750fec9d55e8fef3052dd4"
         }
       ],
-      "purl": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/danieljoos/wincred",
@@ -98,6 +98,35 @@
       }
     },
     {
+      "bom-ref": "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
+      "type": "library",
+      "name": "github.com/fsnotify/fsnotify",
+      "version": "v1.9.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d8c97e3893736d8093cecc6dbfcbca4850fd3db2639a1605d7893f8ca0bb4bd9"
+        }
+      ],
+      "purl": "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?goarch=amd64\u0026goos=linux\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/fsnotify/fsnotify",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-3-Clause"
+            }
+          }
+        ]
+      }
+    },
+    {
       "bom-ref": "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?type=module",
       "type": "library",
       "name": "github.com/godbus/dbus/v5",
@@ -109,7 +138,7 @@
           "content": "4d44774e0b525439a38973a0000c9a65b62621e3f70cf9257778e028657c9974"
         }
       ],
-      "purl": "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/godbus/dbus",
@@ -138,7 +167,7 @@
           "content": "c0dfb1e0d546a4cb0eec4ad49ff994237bc4a04e89b75dd7dacd1bab0a7db5cf"
         }
       ],
-      "purl": "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/inconshreveable/mousetrap",
@@ -167,7 +196,7 @@
           "content": "0cc4d3a27c799bae4873418ea11636735e9609b1f138ec3ac717b3b8b681a5c5"
         }
       ],
-      "purl": "pkg:golang/github.com/spf13/cobra@v1.10.2?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/github.com/spf13/cobra@v1.10.2?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/spf13/cobra",
@@ -196,7 +225,7 @@
           "content": "e04061d8a01807068e363e9bd987b51a21dfc23ab244ea05e11c183bebcfc059"
         }
       ],
-      "purl": "pkg:golang/github.com/spf13/pflag@v1.0.10?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/github.com/spf13/pflag@v1.0.10?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/spf13/pflag",
@@ -225,7 +254,7 @@
           "content": "eac0ff51ca65ee336ad74accda982a4ecd2c67d577a8caea7c8232e583dc707b"
         }
       ],
-      "purl": "pkg:golang/github.com/zalando/go-keyring@v0.2.8?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/github.com/zalando/go-keyring@v0.2.8?goarch=amd64\u0026goos=linux\u0026type=module",
       "externalReferences": [
         {
           "url": "https://github.com/zalando/go-keyring",
@@ -243,29 +272,6 @@
       }
     },
     {
-      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.54.0?type=module",
-      "type": "library",
-      "name": "golang.org/x/crypto",
-      "version": "v0.54.0",
-      "scope": "required",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "60b200e7d2b87e23731f38e766ddad50942342d5167d66de1c1a8ab64dde49cc"
-        }
-      ],
-      "purl": "pkg:golang/golang.org/x/crypto@v0.54.0?goarch=arm64\u0026goos=darwin\u0026type=module",
-      "evidence": {
-        "licenses": [
-          {
-            "license": {
-              "id": "BSD-Source-Code"
-            }
-          }
-        ]
-      }
-    },
-    {
       "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
       "type": "library",
       "name": "golang.org/x/sys",
@@ -277,30 +283,7 @@
           "content": "a3b5c63af6500800c1410e18ed536ad9d456411ec998e516f0ac71e19b0d816b"
         }
       ],
-      "purl": "pkg:golang/golang.org/x/sys@v0.47.0?goarch=arm64\u0026goos=darwin\u0026type=module",
-      "evidence": {
-        "licenses": [
-          {
-            "license": {
-              "id": "BSD-Source-Code"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "bom-ref": "pkg:golang/golang.org/x/term@v0.45.0?type=module",
-      "type": "library",
-      "name": "golang.org/x/term",
-      "version": "v0.45.0",
-      "scope": "required",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "3705b2066a0909b7d31e9c6b5a867d0bafd5c4e7fb89cdb5f48f3165915dadfd"
-        }
-      ],
-      "purl": "pkg:golang/golang.org/x/term@v0.45.0?goarch=arm64\u0026goos=darwin\u0026type=module",
+      "purl": "pkg:golang/golang.org/x/sys@v0.47.0?goarch=amd64\u0026goos=linux\u0026type=module",
       "evidence": {
         "licenses": [
           {
@@ -314,16 +297,21 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.4-0.20260722062715-f1e27e127b7f?type=module",
+      "ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.5-0.20260724084006-e762a166e688?type=module",
       "dependsOn": [
+        "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
         "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
-        "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
-        "pkg:golang/golang.org/x/crypto@v0.54.0?type=module",
-        "pkg:golang/golang.org/x/term@v0.45.0?type=module"
+        "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module"
       ]
     },
     {
       "ref": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
       "dependsOn": [
         "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
       ]
@@ -356,20 +344,7 @@
       ]
     },
     {
-      "ref": "pkg:golang/golang.org/x/crypto@v0.54.0?type=module",
-      "dependsOn": [
-        "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
-        "pkg:golang/golang.org/x/term@v0.45.0?type=module"
-      ]
-    },
-    {
       "ref": "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
-    },
-    {
-      "ref": "pkg:golang/golang.org/x/term@v0.45.0?type=module",
-      "dependsOn": [
-        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
-      ]
     }
   ]
 }

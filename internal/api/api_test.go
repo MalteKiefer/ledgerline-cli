@@ -244,4 +244,3 @@ func testClient(t *testing.T, srv *httptest.Server) *Client {
 	}
 	return c
 }
-

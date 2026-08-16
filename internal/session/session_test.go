@@ -98,4 +98,3 @@ func TestClearRemovesEverything(t *testing.T) {
 		t.Fatalf("second Clear: %v", err)
 	}
 }
-

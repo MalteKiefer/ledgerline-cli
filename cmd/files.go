@@ -31,6 +31,16 @@ func newFilesCommand() *cobra.Command {
 		newFilesRmCommand(),
 		newFilesMkdirCommand(),
 		newFilesSyncCommand(),
+		newFilesRenameCommand(),
+		newFilesMvCommand(),
+		newFilesCopyCommand(),
+		newFilesFolderCommand(),
+		newFilesTrashCommand(),
+		newFilesVersionsCommand(),
+		newFilesLabelsCommand(),
+		newFilesSearchCommand(),
+		newFilesStatsCommand(),
+		newFilesActivityCommand(),
 	)
 	return cmd
 }

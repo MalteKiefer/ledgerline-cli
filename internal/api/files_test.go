@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,101 @@ func TestCreateFolderSendsParent(t *testing.T) {
 	}
 	if folder.ID != 11 || got["name"] != "sub" || got["parent_id"].(float64) != 2 {
 		t.Fatalf("folder=%+v body=%v", folder, got)
+	}
+}
+
+func TestUpdateFileSendsVersionAndFields(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" || r.URL.Path != "/api/v1/files/entries/5" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"file":{"id":5,"name":"renamed.txt","version":2}}`))
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	name := "renamed.txt"
+	var folder *int64 // move to root: JSON null
+	f, err := c.UpdateFile(context.Background(), 5, FileUpdate{Name: &name, FolderID: &folder}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Name != "renamed.txt" || f.Version != 2 {
+		t.Fatalf("file = %+v", f)
+	}
+	if got["version"].(float64) != 1 || got["name"] != "renamed.txt" {
+		t.Fatalf("body = %v", got)
+	}
+	if v, ok := got["file_folder_id"]; !ok || v != nil {
+		t.Fatalf("expected file_folder_id: null in body, got %v (present=%v)", v, ok)
+	}
+}
+
+func TestUpdateFileVersionConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"version_conflict","version":7}`))
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	name := "x"
+	_, err := c.UpdateFile(context.Background(), 5, FileUpdate{Name: &name}, 1)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "version_conflict" || apiErr.Version != 7 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestToggleFileFavorite(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/v1/files/entries/5/toggle" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["field"] != "favorite" || body["value"] != true {
+			t.Fatalf("body = %v", body)
+		}
+		_, _ = w.Write([]byte(`{"file":{"id":5,"favorite":true}}`))
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	f, err := c.ToggleFileFavorite(context.Background(), 5, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Favorite {
+		t.Fatalf("file = %+v", f)
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/v1/files/entries/5/copy" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["file_folder_id"].(float64) != 9 {
+			t.Fatalf("body = %v", body)
+		}
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"file":{"id":6,"name":"a (copy).txt"}}`))
+	}))
+	defer srv.Close()
+
+	c := testClient(t, srv)
+	folder := int64(9)
+	f, err := c.CopyFile(context.Background(), 5, &folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ID != 6 {
+		t.Fatalf("file = %+v", f)
 	}
 }
 
