@@ -1,205 +1,107 @@
 package files
 
 import (
-	"io/fs"
+	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 )
 
-// watcher reports "something changed" under a mapping's local root. Events()
-// yields the mapping key (its local path); the service re-scans that mapping.
-type watcher interface {
-	Events() <-chan string
-	Errors() <-chan error
-	Close() error
-}
+// debounceWindow coalesces a burst of filesystem events into one sync.
+const debounceWindow = 1500 * time.Millisecond
 
-// debouncer coalesces a burst of triggers per key into one emission per window.
-type debouncer struct {
-	window  time.Duration
-	mu      sync.Mutex
-	pending map[string]bool
-	out     chan string
-	timer   *time.Timer
-}
-
-func newDebouncer(window time.Duration) *debouncer {
-	return &debouncer{window: window, pending: map[string]bool{}, out: make(chan string, 64)}
-}
-
-func (d *debouncer) trigger(key string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.pending[key] = true
-	if d.timer == nil {
-		d.timer = time.AfterFunc(d.window, d.flushNow)
+// RunService runs a continuous sync of dir: an initial pass, then a pass whenever
+// the local tree changes (debounced) or the interval elapses. It returns when ctx
+// is cancelled (nil) or when the server rejects the credential (401 → stop so a
+// revoked device does not spin). Other transient sync errors are logged and the
+// loop continues.
+func RunService(ctx context.Context, c *api.Client, dir string, opts SyncOptions, interval time.Duration, log io.Writer) error {
+	if interval <= 0 {
+		interval = 5 * time.Minute
 	}
-}
 
-// flushNow emits every pending key immediately and clears the window.
-func (d *debouncer) flushNow() {
-	d.mu.Lock()
-	keys := make([]string, 0, len(d.pending))
-	for k := range d.pending {
-		keys = append(keys, k)
+	runOnce := func() error {
+		res, err := Sync(ctx, c, dir, opts, log, false)
+		if err != nil {
+			if api.Status(err) == 401 {
+				return err
+			}
+			fmt.Fprintf(log, "sync error: %v\n", err)
+			return nil
+		}
+		fmt.Fprintf(log, "synced: %d pushed, %d pulled, %d conflicts, %d failed\n",
+			res.Pushed, res.Pulled, res.Conflicts, res.Failed)
+		return nil
 	}
-	d.pending = map[string]bool{}
-	if d.timer != nil {
-		d.timer.Stop()
-		d.timer = nil
+
+	if err := runOnce(); err != nil {
+		return err
 	}
-	d.mu.Unlock()
-	for _, k := range keys {
-		d.out <- k
-	}
-}
 
-func (d *debouncer) C() <-chan string { return d.out }
-
-func (d *debouncer) stop() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.timer != nil {
-		d.timer.Stop()
-		d.timer = nil
-	}
-}
-
-// fsWatcher is the real filesystem watcher backed by fsnotify. fsnotify only
-// watches individual directories (non-recursive), so fsWatcher walks the tree
-// at startup and adds a watch for every newly created subdirectory as it
-// appears.
-type fsWatcher struct {
-	root   string
-	ignore *Matcher
-	hidden bool
-	inner  *fsnotify.Watcher
-	events chan string
-	errs   chan error
-	done   chan struct{}
-}
-
-// newFSWatcher recursively watches root and emits root on Events() whenever a
-// non-ignored path under it is created, written, removed, or renamed.
-func newFSWatcher(root string, ignore *Matcher, hidden bool) (watcher, error) {
-	inner, err := fsnotify.NewWatcher()
+	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	w := &fsWatcher{root: root, ignore: ignore, hidden: hidden, inner: inner,
-		events: make(chan string, 8), errs: make(chan error, 1), done: make(chan struct{})}
-	if err := w.addTree(root); err != nil {
-		inner.Close()
-		return nil, err
-	}
-	go w.loop()
-	return w, nil
-}
+	defer w.Close()
+	addTree(w, dir)
 
-// rel returns the root-relative slash path of p under w.root, matching how the
-// ignore Matcher is used elsewhere (see sync.go). ok is false when p cannot be
-// made relative — callers then fail open (emit) rather than silently drop.
-func (w *fsWatcher) rel(p string) (string, bool) {
-	r, err := filepath.Rel(w.root, p)
-	if err != nil {
-		return "", false
-	}
-	return filepath.ToSlash(r), true
-}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-// hiddenPath reports whether any segment of a root-relative slash path begins
-// with a dot. The root itself ("" / ".") is never hidden.
-func hiddenPath(rel string) bool {
-	if rel == "" || rel == "." {
-		return false
-	}
-	for _, seg := range strings.Split(rel, "/") {
-		if strings.HasPrefix(seg, ".") {
-			return true
+	var debounce <-chan time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case ev, ok := <-w.Events:
+			if !ok {
+				return nil
+			}
+			// A newly created directory must be watched too.
+			if ev.Op&fsnotify.Create != 0 {
+				if info, serr := os.Stat(ev.Name); serr == nil && info.IsDir() {
+					addTree(w, ev.Name)
+				}
+			}
+			debounce = time.After(debounceWindow)
+		case err, ok := <-w.Errors:
+			if !ok {
+				return nil
+			}
+			fmt.Fprintf(log, "watch error: %v\n", err)
+		case <-debounce:
+			debounce = nil
+			if err := runOnce(); err != nil {
+				return err
+			}
+		case <-ticker.C:
+			if err := runOnce(); err != nil {
+				return err
+			}
 		}
 	}
-	return false
 }
 
-// skip reports whether a root-relative path is filtered out by the hidden or
-// ignore rules. The root is never skipped.
-func (w *fsWatcher) skip(rel string) bool {
-	if rel == "" || rel == "." {
-		return false
-	}
-	if !w.hidden && hiddenPath(rel) {
-		return true
-	}
-	if w.ignore != nil && w.ignore.Match(rel) {
-		return true
-	}
-	return false
-}
-
-// addTree walks dir and registers a watch on every non-ignored, non-hidden
-// subdirectory (fsnotify is non-recursive). Ignored/hidden subtrees are pruned
-// (SkipDir) so they do not consume OS watch descriptors. A missing dir is not
-// fatal — the service's sanity-guard handles a vanished root.
-func (w *fsWatcher) addTree(dir string) error {
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+// addTree adds root and every subdirectory to the watcher (best-effort; hidden
+// dirs are skipped to match the sync scan).
+func addTree(w *fsnotify.Watcher, root string) {
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if !d.IsDir() {
 			return nil
 		}
-		rel, ok := w.rel(p)
-		if ok && w.skip(rel) {
+		if p != root && len(d.Name()) > 0 && d.Name()[0] == '.' {
 			return filepath.SkipDir
 		}
-		_ = w.inner.Add(p)
+		_ = w.Add(p)
 		return nil
 	})
-}
-
-func (w *fsWatcher) loop() {
-	for {
-		select {
-		case <-w.done:
-			return
-		case ev, ok := <-w.inner.Events:
-			if !ok {
-				return
-			}
-			rel, ok := w.rel(ev.Name)
-			if ok && w.skip(rel) {
-				continue
-			}
-			// A newly created directory needs its own watch.
-			if ev.Op&fsnotify.Create != 0 {
-				if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
-					_ = w.addTree(ev.Name)
-				}
-			}
-			select {
-			case w.events <- w.root:
-			default: // a pending event already covers this root
-			}
-		case err, ok := <-w.inner.Errors:
-			if !ok {
-				return
-			}
-			select {
-			case w.errs <- err:
-			default:
-			}
-		}
-	}
-}
-
-func (w *fsWatcher) Events() <-chan string { return w.events }
-func (w *fsWatcher) Errors() <-chan error  { return w.errs }
-func (w *fsWatcher) Close() error {
-	close(w.done)
-	return w.inner.Close()
 }

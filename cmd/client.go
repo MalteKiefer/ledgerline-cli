@@ -1,16 +1,17 @@
 package cmd
 
 import (
-	"fmt"
-	"io"
+	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
-	"github.com/MalteKiefer/ledgerline-cli/internal/blobcache"
 	"github.com/MalteKiefer/ledgerline-cli/internal/certpin"
 	"github.com/MalteKiefer/ledgerline-cli/internal/config"
+	"github.com/MalteKiefer/ledgerline-cli/internal/session"
+	"github.com/MalteKiefer/ledgerline-cli/internal/uploadledger"
 )
 
 // auditOnce lazily opens the shared audit logger under the config directory.
@@ -21,7 +22,7 @@ var (
 
 // auditLog returns the process-wide audit logger (best-effort; a nil logger
 // silently discards, so callers never nil-check). It records LOCAL operation
-// metadata only — never keys, tokens, passphrases, or content (§18).
+// metadata only — never keys, tokens, or content.
 func auditLog() *audit.Logger {
 	auditOnce.Do(func() {
 		if dir, err := config.Dir(); err == nil {
@@ -38,29 +39,6 @@ func purgeAudit() {
 	}
 }
 
-// degradable is a sharded store that can load in a read-only degraded state when
-// a record shard is permanently missing (gallery.Store, files.Store).
-type degradable interface {
-	Degraded() bool
-	MissingShards() int
-}
-
-// warnIfDegraded prints a clear stderr warning and audits the event when a store
-// loaded degraded (a record shard is missing → read-only, no writes). kind names
-// the module ("gallery"/"files").
-func warnIfDegraded(w io.Writer, kind string, store degradable) {
-	if !store.Degraded() {
-		return
-	}
-	n := store.MissingShards()
-	fmt.Fprintf(w, "Warning: %d %s record shard(s) are missing on the server. Showing what remains; "+
-		"this store is READ-ONLY and will not be saved so nothing is lost.\n", n, kind)
-	auditLog().Log(audit.Event{
-		Event: kind + ".degraded", Outcome: audit.OutcomeError, Count: n,
-		Detail: "record shard(s) missing; store read-only",
-	})
-}
-
 // newAPIClient builds an API client with trust-on-first-use certificate pinning
 // enabled, storing pins in the config directory. All commands reach the server
 // through this helper so pinning is applied uniformly.
@@ -73,35 +51,49 @@ func newAPIClient(server string, opts ...api.Option) (*api.Client, error) {
 	return api.New(server, opts...)
 }
 
-// shardCacheDir is the on-disk cache root (under the config dir) for content-
-// addressed ciphertext shard caches.
-func shardCacheDir() (string, bool) {
+// uploadLedger opens the per-server upload dedup ledger for a module
+// ("gallery"/"files"), stored under the config directory. A resolution failure
+// yields an in-memory-only ledger (path "") so uploads still work, just without
+// cross-run dedup.
+func uploadLedger(kind, server string) (*uploadledger.Ledger, error) {
 	dir, err := config.Dir()
 	if err != nil {
-		return "", false
+		return uploadledger.Open("", server)
 	}
-	return filepath.Join(dir, "cache"), true
+	return uploadledger.Open(filepath.Join(dir, "uploads-"+kind+".json"), server)
 }
 
-// shardCache returns a ciphertext shard cache under the given subdirectory
-// (e.g. "files-shards"), or nil if the config dir cannot be resolved — a nil
-// cache is a valid, disabled cache.
-func shardCache(sub string) *blobcache.Cache {
-	base, ok := shardCacheDir()
-	if !ok {
-		return nil
+// authedClient loads the stored session, builds an authenticated client, and
+// checks the remote kill switch: a 401 clears the local credential; a pending
+// remote wipe erases all local state. Every gallery/files command starts here so
+// a revoked or wiped device fails closed.
+func authedClient(ctx context.Context) (*api.Client, error) {
+	sess, err := session.Load()
+	if errors.Is(err, session.ErrNotAuthenticated) {
+		return nil, errors.New("not authenticated; run 'ledgerline-cli auth login' first")
 	}
-	c, err := blobcache.New(filepath.Join(base, sub))
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return c
-}
-
-// purgeShardCaches removes the on-disk shard caches (best-effort), called on
-// logout so no cached ciphertext lingers after the credential is cleared.
-func purgeShardCaches() {
-	if base, ok := shardCacheDir(); ok {
-		_ = blobcache.Purge(base)
+	client, err := newAPIClient(sess.ServerURL, api.WithToken(sess.Token))
+	if err != nil {
+		return nil, err
 	}
+	_, _, wipe, err := client.Me(ctx)
+	if err != nil {
+		if api.Status(err) == 401 {
+			// The device was revoked from the web or the token expired. Clear the
+			// local credential so nothing stale lingers.
+			_ = session.Clear()
+			return nil, errors.New("this device was revoked or the session expired; local credential cleared — run 'ledgerline-cli auth login'")
+		}
+		return nil, err
+	}
+	if wipe {
+		// Remote kill switch: the owner asked to wipe this client. Erase all local
+		// state and stop.
+		_ = session.WipeLocal()
+		return nil, errors.New("this client was wiped remotely from the web; all local data was erased")
+	}
+	return client, nil
 }

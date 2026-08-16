@@ -70,18 +70,21 @@ sbom:
 	@echo "wrote sbom.json"
 
 # sbom-verify regenerates the SBOM and fails if it differs from the committed
-# sbom.json (ignoring the metadata timestamp), so an unexplained dependency change
-# blocks CI (§20 supply chain).
+# sbom.json (ignoring non-deterministic noise), so an unexplained dependency
+# change blocks CI (§20 supply chain).
 .PHONY: sbom-verify
 sbom-verify:
 	@go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
 		mod -json -noserial -licenses -output sbom.new.json .
-	@# Ignore the metadata timestamp and the main module's own git pseudo-version
-	@# (both move on every commit); the point is to catch DEPENDENCY drift. The
-	@# pinned deps are all tagged releases, so any 0.0.0-<date>-<hash> pseudo-version
-	@# line is the main module and is filtered out.
-	@grep -Ev '("timestamp"|ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' sbom.json     > sbom.a.tmp
-	@grep -Ev '("timestamp"|ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' sbom.new.json > sbom.b.tmp
+	@# Ignore: the metadata timestamp (moves every run); metadata.tools[].hashes
+	@# (the CycloneDX-gomod BINARY's own MD5/SHA*, which `go run` rebuilds fresh
+	@# each time — never byte-identical across machines/toolchain patches, and not
+	@# part of our dependency graph); the main module's own git pseudo-version
+	@# (moves every commit; the pinned deps are all tagged releases, so any
+	@# 0.0.0-<date>-<hash> pseudo-version line is the main module). The point is to
+	@# catch DEPENDENCY drift, not these.
+	@jq 'del(.metadata.timestamp, .metadata.tools)' sbom.json     | grep -Ev '(ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' > sbom.a.tmp
+	@jq 'del(.metadata.timestamp, .metadata.tools)' sbom.new.json | grep -Ev '(ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' > sbom.b.tmp
 	@if ! diff -u sbom.a.tmp sbom.b.tmp; then \
 		rm -f sbom.new.json sbom.a.tmp sbom.b.tmp; \
 		echo "SBOM drift: regenerate with 'make sbom' and commit the change"; exit 1; \

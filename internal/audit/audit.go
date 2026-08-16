@@ -1,7 +1,7 @@
 // Package audit writes a local, append-only JSON-lines audit trail of every
-// operation the CLI performs (§18). It is LOCAL ONLY — never shipped, never
-// phoned home (§7) — and records operation metadata, never secrets: no vault key,
-// per-blob key, token, passphrase, or decrypted content ever reaches it (§18/§29).
+// operation the CLI performs. It is LOCAL ONLY — never shipped, never phoned
+// home — and records operation metadata, never secrets: no token, credential, or
+// file content ever reaches it.
 //
 // The log is one JSON object per line at <config>/audit.log, 0600 in a 0700 dir,
 // size-rotated to a single .1 backup so it stays bounded. Logging is best-effort:

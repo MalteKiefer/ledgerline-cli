@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -99,54 +98,3 @@ func TestClearRemovesEverything(t *testing.T) {
 		t.Fatalf("second Clear: %v", err)
 	}
 }
-
-func TestVaultKeyCacheRoundTrip(t *testing.T) {
-	isolate(t)
-	if _, err := Save(sample()); err != nil {
-		t.Fatal(err)
-	}
-	vk := rep32(0x5a)
-	if err := SaveVaultKey(vk, timeNowPlus(time.Hour)); err != nil {
-		t.Fatalf("SaveVaultKey: %v", err)
-	}
-	got, exp, err := LoadVaultKey()
-	if err != nil {
-		t.Fatalf("LoadVaultKey: %v", err)
-	}
-	if string(got) != string(vk) || exp.Before(timeNowPlus(time.Minute)) {
-		t.Fatalf("cache mismatch: got %x exp %v", got, exp)
-	}
-}
-
-func TestVaultKeyCacheExpires(t *testing.T) {
-	isolate(t)
-	Save(sample())
-	if err := SaveVaultKey(rep32(1), timeNowPlus(-time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := LoadVaultKey(); err != ErrNoVaultKey {
-		t.Fatalf("expired cache should be ErrNoVaultKey, got %v", err)
-	}
-}
-
-func TestLogoutClearsVaultKey(t *testing.T) {
-	isolate(t)
-	Save(sample())
-	SaveVaultKey(rep32(2), timeNowPlus(time.Hour))
-	if err := Clear(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := LoadVaultKey(); err != ErrNoVaultKey {
-		t.Fatalf("logout should clear the vault key, got %v", err)
-	}
-}
-
-func rep32(b byte) []byte {
-	out := make([]byte, 32)
-	for i := range out {
-		out[i] = b
-	}
-	return out
-}
-
-func timeNowPlus(d time.Duration) time.Time { return time.Now().Add(d) }
