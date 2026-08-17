@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"strconv"
 )
 
@@ -37,13 +38,13 @@ type DisplayPreferences struct {
 	TimeFormat string `json:"time_format,omitempty"` // 24h | 12h
 }
 
-// Usage is the per-user storage footprint reported by /me. Quota is the combined
-// files+gallery byte limit; nil means unlimited (the server sends null whenever
-// either dimension is uncapped).
+// Usage is the per-user storage footprint reported by /me: Used is Files and
+// Gallery bytes already combined server-side against the one shared
+// workspace-wide cap (see App\Support\StorageUsage on the server — there is
+// no separate per-module quota to report). Quota is nil when unlimited.
 type Usage struct {
-	Files   int64  `json:"files"`
-	Gallery int64  `json:"gallery"`
-	Quota   *int64 `json:"quota"`
+	Used  int64  `json:"used"`
+	Quota *int64 `json:"quota"`
 }
 
 // Device is one connected device (Sanctum token) from GET /api/v1/devices.
@@ -121,6 +122,58 @@ func (c *Client) Me(ctx context.Context) (User, Usage, bool, error) {
 		return User{}, Usage{}, false, err
 	}
 	return resp.User, resp.Usage, resp.Wipe, nil
+}
+
+// Avatar streams the authenticated user's stored avatar image to w. GET
+// /api/v1/avatar. A 404 *APIError (check with Status(err) == 404) means no
+// avatar is stored — that is the expected, common case, not a failure.
+func (c *Client) Avatar(ctx context.Context, w io.Writer) error {
+	return c.getStream(ctx, "/api/v1/avatar", w)
+}
+
+// WebDavAccess is the caller's app-specific WebDAV/CardDAV/CalDAV access
+// status (MeUser's sibling `WebDavAccess` schema). Enabled reports whether a
+// password is currently set; the password itself is write-only (stored
+// hashed server-side, never returned) — Username/URL are what a DAV client
+// (GNOME's Evolution Data Server, a phone's DAVx5, Thunderbird, ...) needs
+// alongside that password to connect.
+type WebDavAccess struct {
+	Enabled  bool   `json:"enabled"`
+	Username string `json:"username"`
+	URL      string `json:"url"`
+}
+
+// WebDavStatus reads the current WebDAV access status. GET /api/v1/account/webdav.
+func (c *Client) WebDavStatus(ctx context.Context) (WebDavAccess, error) {
+	var access WebDavAccess
+	if err := c.request(ctx, "GET", "/api/v1/account/webdav", nil, &access); err != nil {
+		return WebDavAccess{}, err
+	}
+	return access, nil
+}
+
+// SetWebDavPassword sets (or replaces) the app-specific WebDAV password —
+// distinct from the login password, used by CardDAV/CalDAV/WebDAV clients.
+// Must be at least 12 characters. Replacing it invalidates the previous one
+// for every client using it (there is one shared password, not one per
+// device). PUT /api/v1/account/webdav.
+func (c *Client) SetWebDavPassword(ctx context.Context, password string) (WebDavAccess, error) {
+	var access WebDavAccess
+	body := map[string]string{"webdav_password": password}
+	if err := c.request(ctx, "PUT", "/api/v1/account/webdav", body, &access); err != nil {
+		return WebDavAccess{}, err
+	}
+	return access, nil
+}
+
+// ClearWebDavPassword disables WebDAV/CardDAV/CalDAV access entirely (every
+// client using the old password stops working). DELETE /api/v1/account/webdav.
+func (c *Client) ClearWebDavPassword(ctx context.Context) (WebDavAccess, error) {
+	var access WebDavAccess
+	if err := c.request(ctx, "DELETE", "/api/v1/account/webdav", nil, &access); err != nil {
+		return WebDavAccess{}, err
+	}
+	return access, nil
 }
 
 // Heartbeat reports this client's sync activity (state is "idle" or "syncing",

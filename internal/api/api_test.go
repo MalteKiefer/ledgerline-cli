@@ -111,7 +111,7 @@ func TestMeSendsBearerAndDecodes(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tok-xyz" {
 			t.Errorf("Authorization = %q", got)
 		}
-		w.Write([]byte(`{"user":{"id":1,"name":"Bob","email":"b@x.io"},"usage":{"files":2048,"gallery":4096}}`))
+		w.Write([]byte(`{"user":{"id":1,"name":"Bob","email":"b@x.io"},"usage":{"used":6144,"quota":10485760}}`))
 	}))
 	defer srv.Close()
 
@@ -123,7 +123,7 @@ func TestMeSendsBearerAndDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Me: %v", err)
 	}
-	if user.Name != "Bob" || usage.Files != 2048 || usage.Gallery != 4096 {
+	if user.Name != "Bob" || usage.Used != 6144 || usage.Quota == nil || *usage.Quota != 10485760 {
 		t.Fatalf("unexpected: user=%+v usage=%+v", user, usage)
 	}
 }
