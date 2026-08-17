@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -164,9 +165,19 @@ func newFilesUploadCommand() *cobra.Command {
 	return cmd
 }
 
+// filesLsJSONResult is `files ls --json`'s output: the raw folder/file tree +
+// usage, for a non-interactive caller (e.g. a GUI's remote-folder picker)
+// instead of the human tree render.
+type filesLsJSONResult struct {
+	Folders []api.FileFolder `json:"folders"`
+	Files   []api.FileEntry  `json:"files"`
+	Usage   api.FilesUsage   `json:"usage"`
+}
+
 // newFilesLsCommand prints the remote folder/file tree + usage.
 func newFilesLsCommand() *cobra.Command {
-	return &cobra.Command{
+	var jsonFlag bool
+	cmd := &cobra.Command{
 		Use:   "ls",
 		Short: "List the whole folder/file tree",
 		Args:  cobra.NoArgs,
@@ -180,6 +191,9 @@ func newFilesLsCommand() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
+			if jsonFlag {
+				return json.NewEncoder(out).Encode(filesLsJSONResult{Folders: folders, Files: entries, Usage: usage})
+			}
 			if len(folders) == 0 && len(entries) == 0 {
 				fmt.Fprintln(out, "No files.")
 			} else {
@@ -193,6 +207,8 @@ func newFilesLsCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonFlag, "json", false, "print the raw folder/file tree + usage as JSON")
+	return cmd
 }
 
 // newFilesDownloadCommand downloads files by id.

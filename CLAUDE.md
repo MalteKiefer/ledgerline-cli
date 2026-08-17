@@ -35,6 +35,9 @@ Base path `/api/v1`. All calls carry a Sanctum bearer (`Authorization: Bearer �
 - `GET /me` — identity + storage usage + remote-wipe flag (kill switch).
 - `GET /devices`, `DELETE /devices/{id}`, `POST /devices/{id}/wipe`,
   `POST /device/heartbeat`, `DELETE /auth/session` (logout).
+- `GET /avatar` — stream the stored avatar image (404 = none stored).
+- `GET/PUT/DELETE /account/webdav` — app-specific WebDAV/CardDAV/CalDAV
+  password status/set/clear (`WebDavAccess`; distinct from the login password).
 
 **Files — fully wrapped (2026-08-16).** Unlike gallery, every `Files`-tagged
 openapi operation (v1.671.0) has a typed Go method, split by feature area under
@@ -163,23 +166,25 @@ Stdlib only for hashing (`crypto/sha256` for the sync content compare), transpor
 ## 7. Command surface
 
 ```
-auth login|logout|status          device pairing → bearer; identity; revoke
+auth login|logout|status|avatar   device pairing → bearer; identity; revoke; avatar image (login/status: --json)
+auth webdav show|set|clear        app-specific WebDAV/CardDAV/CalDAV password (--json)
 status                            local build info + update check
 gallery upload <path...>          multipart upload (files/dirs, --jobs)
 gallery list                      photo/video list
 gallery download <id...>          originals (--out, --variant)
 gallery rm <id...>                trash (bulk when >1)
 files upload <file...>            multipart upload (--folder, --jobs)
-files ls                          folder/file tree + usage
+files ls                          folder/file tree + usage (--json)
 files download <id...>            raw bytes (--out)
 files rm <id...>                  trash a file
 files mkdir <name>                create folder (--parent)
-files sync <dir>                  two-way sync (--direction, --conflict, --interval, --service)
+files sync <dir>                  two-way sync (--direction, --conflict, --interval, --service, --json,
+                                   --hidden, --remote-folder, --keep-versions, --max-versions)
 files rename <id> <name>          rename a file
 files mv <id...>                  move files (--to <folder-id> | --root)
 files copy <id>                   duplicate a file (--to <folder-id>)
 files folder rename|mv|rm|restore folder rename/move/trash(+--force)/restore
-files trash ls|restore|rm|empty   trashed files+folders (rm/empty are permanent)
+files trash ls|restore|rm|empty   trashed files+folders (rm/empty are permanent; ls: --json)
 files versions ls|download|restore <file-id> [version]   version history
 files labels ls|create|rm|set     coloured labels + per-file label set
 files search <query>              full-text/OCR search
@@ -205,10 +210,19 @@ shows up.
   propagation) would be a separate, carefully-reviewed feature.
 - The full `internal/api` Files surface (§2) has no CLI command for sharing,
   encryption, archives or chunked upload by design (§7) — it exists for a
-  future GTK desktop sync client to import as a library. That GTK app itself
-  does not exist yet in this repo; `internal/files` (tree render + sync engine)
-  is local-CLI-only today and would need a GUI-facing layer (progress/conflict
-  callbacks instead of stdout/a progress bar) when that client is built.
+  future GTK desktop sync client to import as a library. `internal/files`
+  (tree render + sync engine) is still local-CLI-only today.
+- **The GTK client now exists**, as a separate sibling repo/Go module
+  (`../ledgerline-gtk`), not a subdirectory of this one — it does **not**
+  import `internal/*` (Go's own-module `internal/` visibility rule would
+  forbid that across module boundaries anyway). Instead it drives this
+  repo's built binary as a subprocess via `auth login/status --json` and
+  `files sync --json` (§7). Keep those three flags' output shapes
+  (`loginJSONResult`/`statusJSONResult`/`syncJSONEvent` in `cmd/auth.go` /
+  `cmd/files_sync.go`) additive/backward-compatible — ledgerline-gtk's
+  `internal/cliexec.CheckJSONSupport` feature-sniffs for `--json` in `files
+  sync --help` at startup and refuses to run against an older binary, but it
+  does not pin an exact version.
 - CI-infra items inherited from before the pivot (SBOM/reproducible-build/signed
   commits) are org-policy, not in the repo tree.
 
@@ -224,6 +238,54 @@ shows up.
 
 ## 10. Changelog
 
+- 2026-08-16 feat: **`auth webdav show|set|clear`**, for ledgerline-gtk's
+  GNOME/CardDAV integration. Wraps the existing server-side app-specific
+  WebDAV password (`GET/PUT/DELETE /api/v1/account/webdav` — distinct from
+  the login password; the one credential shared by every DAV client:
+  Evolution Data Server, DAVx5, Thunderbird, ...). `internal/api.WebDavAccess`
+  + three `Client` methods; all three subcommands support `--json`. This is
+  the CLI-side half of native CardDAV/CalDAV sync — the server already speaks
+  real DAV (Sabre, unified `/dav`, `.well-known/carddav`+`.well-known/caldav`
+  redirects) and GNOME's Evolution Data Server (already on this Fedora, no
+  new install) does the actual two-way contact/calendar sync; ledgerline-gtk
+  only needs to manage this one password + register a local EDS source.
+- 2026-08-16 feat: **local file versioning safety net + trash --json**, for
+  ledgerline-gtk. `files sync` gains `--keep-versions`/`--max-versions`: right
+  before a pull would overwrite an existing local file, it's snapshotted into
+  `<localDir>/.ledgerline-versions/<reldir>/<stem>~<timestamp><ext>` (pruned
+  to `--max-versions`, default 5) — a local, Syncthing-`.stversions`-shaped
+  safety net independent of the server's own file version history (`files
+  versions`), which only protects the *remote* copy (`internal/files/
+  sync.go`: `snapshotLocalVersion`/`pruneVersions`, wired into `pullTo`).
+  `.ledgerline-versions/` is always excluded from the sync scan itself
+  (`scanLocal`), even with `--hidden`. `files trash ls --json` rounds it out
+  (raw trashed files/folders, for a GUI trash view). Both opt-in/additive;
+  default `files sync` behaviour is unchanged. Full suite green.
+- 2026-08-16 feat: **multi-folder sync + hidden files/ignore list + avatar**,
+  for ledgerline-gtk's multiple-sync-pair UI. `files sync` gains
+  `--remote-folder <id>` (scope a pass to one remote folder's subtree instead
+  of the whole root — `internal/files/sync.go`'s `remoteModel` now indexes
+  paths relative to that scope; `ensureFolder("")` resolves to the scope
+  folder itself rather than true root) and `--hidden` (include dotfiles,
+  default still skips them). New `internal/files/ignore.go`: a
+  `.ledgerline-ignore` file at a synced directory's root (gitignore-lite glob
+  patterns, one per line) excludes matching paths from both push and pull;
+  the ignore file itself is never synced. `files ls --json` (raw
+  folders/files/usage, for a GUI's remote-folder picker) and
+  `internal/api.Avatar` + `auth avatar` (streams `GET /api/v1/avatar`; 404 =
+  no avatar stored, the common case) round it out. All additive; existing
+  `files sync` behaviour with no new flags is unchanged (full suite green).
+- 2026-08-16 feat: **`--json` output for the GTK client's subprocess use** —
+  `auth login --json`, `auth status --json` (single JSON line each,
+  `cmd/auth.go`), and `files sync --json`/`--service --json` (NDJSON: one
+  `{"type":"log",...}` line per progress line the existing sync engine
+  writes, plus a `{"type":"summary",...}` line per completed pass;
+  `cmd/files_sync.go`'s `ndjsonLineWriter` wraps the `io.Writer` `internal/
+  files.Sync`/`RunService` already take — neither of those, nor any other
+  `internal/*` package, changed). Purely additive cmd/-layer flags; existing
+  human-text output is unchanged when `--json` is absent. Written for
+  `../ledgerline-gtk` (see §8), a separate sibling Go module that drives this
+  binary as a subprocess rather than importing this repo's code.
 - 2026-08-16 feat: **full Files-tag API surface + sync-core CLI**, as the Go
   library base for a future GTK desktop sync client. `internal/api` now wraps
   every `Files`-tagged openapi operation (v1.671.0; see §2), split across

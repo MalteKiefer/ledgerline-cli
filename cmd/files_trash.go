@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -9,6 +10,12 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
 )
+
+// filesTrashJSONResult is `files trash ls --json`'s output.
+type filesTrashJSONResult struct {
+	Files   []api.FileEntry  `json:"files"`
+	Folders []api.FileFolder `json:"folders"`
+}
 
 // newFilesTrashCommand builds the `files trash` group: list/restore/purge for
 // trashed files and folders (a soft-deleted file goes there via `files rm`; a
@@ -28,7 +35,8 @@ func newFilesTrashCommand() *cobra.Command {
 }
 
 func newFilesTrashLsCommand() *cobra.Command {
-	return &cobra.Command{
+	var jsonFlag bool
+	cmd := &cobra.Command{
 		Use:   "ls",
 		Short: "List trashed files and folders",
 		Args:  cobra.NoArgs,
@@ -42,6 +50,9 @@ func newFilesTrashLsCommand() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
+			if jsonFlag {
+				return json.NewEncoder(out).Encode(filesTrashJSONResult{Files: entries, Folders: folders})
+			}
 			if len(entries) == 0 && len(folders) == 0 {
 				fmt.Fprintln(out, "Trash is empty.")
 				return nil
@@ -50,6 +61,8 @@ func newFilesTrashLsCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonFlag, "json", false, "print the trashed files/folders as JSON")
+	return cmd
 }
 
 // isTrashedFile/isTrashedFolder let `trash restore`/`trash rm` dispatch an id
