@@ -4,7 +4,7 @@
   "specVersion": "1.6",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-16T04:21:02+02:00",
+    "timestamp": "2026-08-20T15:13:44+02:00",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -13,23 +13,23 @@
         "hashes": [
           {
             "alg": "MD5",
-            "content": "d80137c4b3bc0705b256a99e51929ed7"
+            "content": "baf71c3f08bd80b0260a8326de95aff2"
           },
           {
             "alg": "SHA-1",
-            "content": "c7710e3d00df947d68cc3b53e12ea1445d68c3f9"
+            "content": "e7e013efc2b2bec93ee00b18e8d7310e7692deed"
           },
           {
             "alg": "SHA-256",
-            "content": "64aec5fbfa0557254ab258785046d3216a30cacf747d64d5736585a73823c3d1"
+            "content": "65f5bfec4029ba9aca424ad8fddcbb20601769449df65bd88cfd7d4dc0409e03"
           },
           {
             "alg": "SHA-384",
-            "content": "ca50ec5c3a4ea4f18c7e646d2ac34f10a78b20ab8f3e9ab4a1f15d0501aa86abe2c0c0f60df2f0c3186da2c44d503ce1"
+            "content": "611550336c43bf82e17c47edd4f4096db3cd71602a5ecfe10556eb007e6470fb74002648e3555190609c9459a4822571"
           },
           {
             "alg": "SHA-512",
-            "content": "b27ebecec08d68a23495d98b8024b39c518b4afa64be3ce7a96ed796ac88a3924dac3155b505cc75eb37e46c9ca0dfe636b0343882aba5932378d5f8f33e08fa"
+            "content": "8b507a114ed6049c13f677ae288806e1d19880f9531ea6f8f272ad0571060c720b20a5c74a5c5dad30f3eeefd76ce5ce646e54b60c14b398a16d9588e0f07a85"
           }
         ],
         "externalReferences": [
@@ -272,6 +272,29 @@
       }
     },
     {
+      "bom-ref": "pkg:golang/golang.org/x/net@v0.58.0?type=module",
+      "type": "library",
+      "name": "golang.org/x/net",
+      "version": "v0.58.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ca7586eeba988b871ca5312e3d9d901961e4b5510cf433028fdcb30c4d10ed3a"
+        }
+      ],
+      "purl": "pkg:golang/golang.org/x/net@v0.58.0?goarch=amd64\u0026goos=linux\u0026type=module",
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-Source-Code"
+            }
+          }
+        ]
+      }
+    },
+    {
       "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
       "type": "library",
       "name": "golang.org/x/sys",
@@ -301,7 +324,8 @@
       "dependsOn": [
         "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
         "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
-        "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module"
+        "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
+        "pkg:golang/golang.org/x/net@v0.58.0?type=module"
       ]
     },
     {
@@ -340,6 +364,12 @@
       "dependsOn": [
         "pkg:golang/github.com/danieljoos/wincred@v1.2.3?type=module",
         "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?type=module",
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/golang.org/x/net@v0.58.0?type=module",
+      "dependsOn": [
         "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
       ]
     },

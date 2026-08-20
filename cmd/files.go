@@ -22,7 +22,7 @@ import (
 func newFilesCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "files",
-		Short: "Upload, list, download, remove files and folders; two-way sync",
+		Short: "Browse, transfer, organise, share and mount your files",
 	}
 	cmd.AddCommand(
 		newFilesUploadCommand(),
@@ -41,9 +41,23 @@ func newFilesCommand() *cobra.Command {
 		newFilesSearchCommand(),
 		newFilesStatsCommand(),
 		newFilesActivityCommand(),
+		newFilesShareCommand(),
+		newFilesUploadLinkCommand(),
+		newFilesSharedCommand(),
+		newFilesZipCommand(),
+		newFilesArchiveCommand(),
+		newFilesKeysCommand(),
+		newFilesEncryptCommand(),
+		newFilesDecryptCommand(),
+		newFilesWebdavCommand(),
 	)
 	return cmd
 }
+
+// chunkedUploadThreshold is the size above which `files upload` switches from a
+// single multipart body to the chunked-upload session, so a failed transfer
+// only costs the current part rather than the whole file.
+const chunkedUploadThreshold = 64 << 20
 
 // newFilesUploadCommand uploads files into a folder (flat; sync handles trees).
 // It skips a file whose bytes already exist on the server (remote sha256) or were
@@ -51,7 +65,7 @@ func newFilesCommand() *cobra.Command {
 func newFilesUploadCommand() *cobra.Command {
 	var folder int64
 	var jobs, batch int
-	var force bool
+	var force, noChunked bool
 	cmd := &cobra.Command{
 		Use:   "upload <file...>",
 		Short: "Upload files into a folder (--folder; root by default)",
@@ -121,8 +135,18 @@ func newFilesUploadCommand() *cobra.Command {
 						return
 					}
 
-					open := func() (io.ReadCloser, error) { return os.Open(p) }
-					_, uerr := client.UploadFile(cmd.Context(), name, folderPtr, open)
+					info, serr := os.Stat(p)
+					var uerr error
+					switch {
+					case serr != nil:
+						uerr = serr
+					case !noChunked && info.Size() > chunkedUploadThreshold:
+						// Large file: resume-friendly part-by-part session.
+						_, uerr = client.UploadFileChunked(cmd.Context(), p, name, folderPtr, nil)
+					default:
+						open := func() (io.ReadCloser, error) { return os.Open(p) }
+						_, uerr = client.UploadFile(cmd.Context(), name, folderPtr, open)
+					}
 					mu.Lock()
 					defer mu.Unlock()
 					if uerr != nil {
@@ -161,6 +185,7 @@ func newFilesUploadCommand() *cobra.Command {
 	cmd.Flags().IntVar(&jobs, "jobs", 4, "number of concurrent uploads")
 	cmd.Flags().IntVar(&batch, "batch", 50, "checkpoint the dedup ledger every N uploads (0 disables)")
 	cmd.Flags().BoolVar(&force, "force", false, "upload even files already present on the server")
+	cmd.Flags().BoolVar(&noChunked, "no-chunked", false, "always send one multipart body, even for large files")
 	return cmd
 }
 
@@ -214,7 +239,7 @@ func newFilesDownloadCommand() *cobra.Command {
 			if outDir == "" {
 				outDir = "."
 			}
-			if err := os.MkdirAll(outDir, 0o755); err != nil {
+			if err := os.MkdirAll(outDir, 0o750); err != nil {
 				return err
 			}
 			names := map[int64]string{}
