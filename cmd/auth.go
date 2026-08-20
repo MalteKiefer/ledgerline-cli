@@ -117,28 +117,6 @@ func newAuthStatusCommand() *cobra.Command {
 	}
 }
 
-// claimError translates a claim failure into a user-facing message.
-func claimError(err error) error {
-	switch api.Status(err) {
-	case 410:
-		return errors.New("the code is expired, unknown, or already used — generate a fresh one in the web profile")
-	case 429:
-		return errors.New("too many attempts; wait a moment and try again")
-	default:
-		return err
-	}
-}
-
-// pollError translates a poll failure into a user-facing message.
-func pollError(err error) error {
-	switch api.Status(err) {
-	case 410:
-		return errors.New("the pairing was rejected or the code expired; run login again")
-	default:
-		return err
-	}
-}
-
 // defaultDeviceName builds a recognisable per-machine device label.
 func defaultDeviceName() string {
 	host, err := os.Hostname()

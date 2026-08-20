@@ -87,6 +87,7 @@ func NewRootCommand() *cobra.Command {
 		newAuthCommand(),
 		newGalleryCommand(),
 		newFilesCommand(),
+		newSyncCommand(),
 		newAuditCommand(),
 	)
 	return root

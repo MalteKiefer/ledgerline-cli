@@ -12,15 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Windows tray application (`ledgerline-gui`).** A tray icon showing the
   version, the signed-in account with its profile picture, the server, and your
   storage broken out per module — Files, Gallery, and the total against your
-  quota — with Sign in, Sign out, Open web app, Refresh and Quit in its menu. It
-  shares the CLI's credential, certificate pins and remote kill switch, so both
-  see the same session.
-- **Graphical sign-in.** Signing in from the tray opens a small dialog in your
-  browser instead of a console window: server, one-time code, device name. Your
-  password and your second factor stay in the web app — this client only ever
-  handles the short-lived pairing code and the token your server issues. The
-  dialog is served on 127.0.0.1 under a single-use address, refuses requests
-  coming from other pages, and shuts itself down when it is done.
+  quota — with Sign in, Synced folders, Sign out, Open web app, Refresh and Quit
+  in its menu. It shares the CLI's credential, certificate pins and remote kill
+  switch, so both see the same session.
+- **Sign in with your password, or with a code — your choice.** The tray opens a
+  proper window (no browser, no console) with both routes on screen: e-mail and
+  password plus your two-factor code, or the one-time code you approve in the
+  web app. The same choice is in the terminal: `auth login` for credentials,
+  `auth pair` for a code. Your second factor still gates everything — the server
+  issues nothing until the code is right, and a recovery code works in its
+  place. The password is typed without being echoed, can be piped in with
+  `--password-stdin`, and is never written anywhere.
+- **Synced folders.** Set up as many folder pairs as you like, each with its own
+  remote folder, direction, conflict policy and schedule: `sync add`, `sync ls`,
+  `sync set`, `sync rm`, `sync run`, and `sync service` to keep them running.
+  The tray has the same list under "Synced folders…", with a folder picker,
+  Pause/Resume and Sync now, and it syncs due folders in the background while it
+  is open. Removing a pair deletes nothing — it stops the arrangement, and your
+  files stay where they are on both sides. Deletions are still never propagated
+  between the two.
 - **Windows installer.** One setup .exe per architecture installs both the CLI
   and the tray application, creates Start-menu shortcuts, optionally adds the
   install directory to PATH and optionally starts the tray at sign-in, and

@@ -117,19 +117,26 @@ the pivot). What the CLI still protects:
   lives in a temp file removed when the handle closes, and a delete through the
   mount trashes server-side rather than force-deleting, so a file manager's
   stray delete stays recoverable.
-- **Sign-in dialog:** served on 127.0.0.1 on an ephemeral port, reachable only
-  under a 128-bit per-run path token (an unknown token is a flat 404), refusing
-  cross-origin form posts, under a strict default-src 'none' CSP with no
-  external asset, and shut down when the flow ends or after 15 minutes. It
-  renders no secret back into the page — not the code, not the bearer — and a
-  failed attempt stores nothing.
+- **Sign-in:** the password is held for the duration of one request and never
+  written to disk, to the audit log or to argv (terminal read or stdin; the
+  `--password` flag exists but is documented as the visible option). The second
+  factor is enforced by the server, which issues nothing until the code is
+  right, so adding the password route did not weaken it. A failed attempt stores
+  nothing, and the issued token is verified against /me before it is stored.
+- **Install id:** 16 random bytes beside the configuration, not derived from the
+  machine and not a secret. It exists so the server can replace this
+  installation's device entry on a re-login instead of accumulating dead ones —
+  which previously pushed live devices out of the cap.
+- **Sync configuration:** local paths and remote folder names in sync.json,
+  0600. Not secret, but not other users' business either. It holds no
+  credential; the runner uses the same stored session as every command.
 - **Tray GUI:** shares the CLI's credential, pins and kill switch — it calls
   `/me` on every refresh, clears the credential on a 401 and wipes on a pending
   remote wipe, exactly as the CLI does. It launches two subprocesses, both as
-  argv arrays with no shell: rundll32 with the configured server URL, which is
-  scheme-checked to http(s) first so a tampered config cannot turn a menu click
-  into a shell action, and rundll32 again to open the local sign-in dialog. The
-  avatar it fetches is capped at 4 MiB.
+  one argv array with no shell: rundll32 with the configured server URL, which
+  is scheme-checked to http(s) first so a tampered config cannot turn a menu
+  click into a shell action. The avatar it fetches is capped at 4 MiB. Sign-in
+  no longer launches anything: it opens a window in-process.
 - **Audit trail:** local-only JSONL metadata (§7); never content or secrets.
 
 Host assumptions: the host may be multi-user; argv/env/shell-history/temp paths
@@ -151,8 +158,10 @@ internal/gallery/       local helpers: media-file walking, upload naming
 internal/files/         local helpers: folder-tree render (tree.go) + two-way sync (sync.go) + watch service (watch.go)
 internal/webdavfs/      webdav.FileSystem over internal/api (the `files webdav` mount backend)
 internal/trayui/        tray menu model + avatar/brand icon rendering (platform-free, unit tested)
-internal/loginui/       graphical sign-in: a loopback, token-gated HTML dialog opened in the browser
-internal/pairflow/      claim -> approve -> verify -> store, shared by every front end
+internal/authflow/      the two sign-in routes (password+2FA, one-time code), shared by every front end
+internal/win32ui/       hand-rolled Win32 toolkit: window, fields, buttons, list, folder picker, message loop
+internal/syncconfig/    the configured folder pairs; one file, read and written by CLI and tray alike
+internal/installid/     stable per-installation id so a re-login replaces this machine's device entry
 internal/clientset/     one place that turns the stored session into a pinned, authenticated client
 packaging/nfpm.yaml     .deb / .rpm recipe
 packaging/windows/      NSIS installer (CLI + tray GUI, Start menu, PATH, autostart)
@@ -253,24 +262,47 @@ files archive create|extract      server-side archive build (zip/tar.gz/tar.xz/7
 files keys                        keyring: own PGP/S-MIME keys + recipients
 files encrypt|decrypt             server-side public-key encrypt (file or --folder) / decrypt
 audit show|path|purge             local audit trail
+
+auth login                        e-mail + password (+ TOTP or recovery code)
+auth pair                         one-time code from the web profile
+sync add|ls|set|rm                the standing folder pairs
+sync run [id] | run --all         sync now
+sync service                      run each pair on its own schedule
 ```
 
-The desktop GUI (`ledgerline-gui`, Windows) is a tray icon, not a second
-command surface: it shows the version, the signed-in account (with its avatar),
-the server host and the storage usage broken out per module (files, gallery,
-total against the shared quota), and offers Sign in / Sign out / Open web app /
-Refresh / Quit. Sign-in opens the `internal/loginui` dialog — a page served on
-loopback under a per-run path token, shown in the user's browser — because
-pairing needs a one-time code copied from the web app; no console window is
-involved. Everything else runs in-process against the same session and pinned
-client. **No password or second factor passes through this client at all**: the
-user authenticates in the web app (with their own 2FA), and only the short-lived
-pairing code and the issued bearer cross this boundary.
+The desktop GUI (`ledgerline-gui`, Windows) is a tray icon plus two windows, not
+a second command surface. The menu shows the version, the signed-in account
+(with its avatar), the server host and the storage usage broken out per module
+(files, gallery, total against the shared quota), and offers Sign in / Synced
+folders / Sign out / Open web app / Refresh / Quit.
+
+Sign-in is a native window (`cmd/ledgerline-gui/login_windows.go` over
+`internal/win32ui`) — no browser, no console — offering both routes and letting
+the user choose: e-mail and password with the account's second factor, or the
+one-time code approved in the web app. Neither is universally better, which is
+why both are on screen: the password route is fewer steps, the code route never
+types the password into a desktop program.
+
+The second factor is not weakened by offering the password route. The server
+answers 422 {two_factor:true} until a valid TOTP or recovery code arrives, so
+the API is exactly as gated as the web app; this client only relays the code and
+never stores it. What the client now does handle, which it previously did not,
+is the password itself — held in memory for one request and never written
+anywhere.
+
+Synced folders is a list window over `internal/syncconfig`: add a folder with
+the shell picker, pause, resume, sync now, remove. The tray also runs due pairs
+in the background while it is open. Each window runs on its own OS thread with
+its own message loop, so neither can freeze the tray.
 
 Secret handling: every share/archive/upload-link password flag has a
 `--password-stdin` twin so the secret never reaches argv; a private-key
 passphrase has ONLY the stdin path (`--passphrase-stdin`), no flag at all,
-because it unlocks key material rather than gating a link (§3).
+because it unlocks key material rather than gating a link (§3). The account
+password follows the same rule and defaults to a non-echoing terminal read.
+Fixing that exposed a real defect in the stdin reader: it buffered all of stdin,
+so a piped password swallowed whatever came after it (a prompted 2FA code, for
+instance). It now reads one line without reading ahead.
 
 The whole wrapped Files surface now has a CLI command. `internal/api` still
 carries more than the CLI strictly needs (it is also the intended Go library for
@@ -285,7 +317,19 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   need arises.
 - `files sync` propagates no deletions and keeps no last-seen state; that is a
   deliberate safety choice, not a bug. A stateful three-way sync (with delete
-  propagation) would be a separate, carefully-reviewed feature.
+  propagation) would be a separate, carefully-reviewed feature. The configured
+  pairs (§7) inherit exactly that behaviour: removing a pair removes the
+  arrangement, never a file.
+- The Win32 toolkit does not do themed controls. Visual styles need a
+  side-by-side manifest compiled into the executable, and the Go toolchain
+  cannot produce the resource object on its own; adding one means either a
+  committed binary blob or a resource generator in the build. Controls use the
+  correct system font and scale with DPI, but look classic. Worth revisiting if
+  the GUI grows past two windows.
+- The sync window can add, pause, run and remove a pair, but not edit its remote
+  folder, direction or conflict policy — those need `sync set`. A properties
+  dialog is the obvious next step; it was left out rather than shipped as a
+  half-built form.
 - `internal/files` (tree render + sync engine) and `internal/webdavfs` are both
   CLI-facing today: the sync engine writes progress to stdout, and the WebDAV
   filesystem has no progress/conflict callbacks. A GUI-facing layer would need
@@ -335,6 +379,37 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   `docs/superpowers/plans/2026-08-11-plaintext-rewrite-gallery-files.md`.
 
 ## 10. Changelog
+
+- 2026-08-20 feat: **password sign-in, a native window, and configured folder
+  pairs.** Sign-in no longer goes through a browser page: `internal/win32ui` is
+  a small hand-rolled Win32 toolkit (window, fields, buttons, list, folder
+  picker, message loop, DPI-aware, system font) and the dialog on top of it
+  offers both routes — credentials with the account's second factor, or the
+  one-time code — because both are legitimate and the choice is the user's.
+  `internal/authflow` holds both and is shared with the CLI, which gains
+  `auth login` next to `auth pair`. The factor stays server-enforced; what is
+  new is that this client now handles a password at all, so it is read without
+  echo, kept for one request, and never written anywhere. That work exposed a
+  real bug: the stdin secret reader buffered all of stdin and swallowed the next
+  line, so a piped password ate the prompted 2FA code.
+
+  The second half is the sync area the tray was missing. `internal/syncconfig`
+  stores folder pairs (local directory, remote folder, direction, conflict
+  policy, schedule, last outcome) in one file that the CLI (`sync add|ls|set|
+  rm|run|service`) and the tray window both read and write, and the sync engine
+  grew a RemoteRoot so a pair can be scoped to one remote folder instead of
+  mirroring the whole tree — without which "several folders" cannot mean
+  anything. The tray runs due pairs in the background. Removing a pair removes
+  the arrangement and no files, and deletions are still never propagated.
+
+  Tests: the factor is enforced (nothing stored until the code is right),
+  recovery codes work, bad credentials keep the server's deliberate ambiguity
+  with a blocked account, unverified e-mail is its own failure, the token is
+  verified before storage, the install id is sent, scoping really scopes (files
+  outside the pair's folder are neither pulled nor uploaded, an escaping root is
+  refused, a missing root is created), and the CLI round-trips add/list/pause/
+  run/remove. The toolkit has an opt-in manual test that puts a real window on
+  screen, since "does it look right" cannot be asserted.
 
 - 2026-08-20 feat: **graphical sign-in + per-module storage in the tray.**
   Sign-in no longer opens a console: `internal/loginui` serves a small dialog on

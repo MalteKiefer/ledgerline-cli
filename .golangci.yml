@@ -40,12 +40,10 @@ linters:
         text: "G304|G302|G306"
         linters:
           - gosec
-      # The tray launches two subprocesses with a computed argument: the CLI
-      # sitting next to its own executable (sign-in needs a console for the
-      # one-time code) and rundll32 with the configured server URL, which is
-      # scheme-validated first. Both are argv-array calls — no shell parses
-      # them — and both paths come from this program's own install directory or
-      # config, not from the server or the network.
+      # The tray launches one subprocess with a computed argument: rundll32 with
+      # the configured server URL, which is scheme-validated first. It is an
+      # argv-array call — no shell parses it — and the URL comes from this
+      # program's own stored session, not from the network.
       - path: cmd/ledgerline-gui/main_windows\.go
         text: "G204"
         linters:
@@ -61,8 +59,18 @@ linters:
       # LEDGERLINE_CLI_CONFIG_DIR the user set); the server never influences
       # them, so the "file inclusion via variable" and taint findings here are
       # about our own config location, not untrusted input.
-      - path: internal/(session/session|uploadledger/ledger|config/config)\.go
+      - path: internal/(session/session|uploadledger/ledger|config/config|installid/installid|syncconfig/syncconfig)\.go
         text: "G304|G703"
+        linters:
+          - gosec
+      # internal/win32ui is nothing but syscall marshalling: every window API
+      # takes a pointer as a uintptr and sizes as int32, so unsafe.Pointer
+      # conversions (G103) and the int/int32/uintptr traffic (G115) are the
+      # interface, not a lapse. Sizes come from this program's own layout
+      # constants and the system DPI, never from the network. Real error
+      # handling in the package is still checked.
+      - path: internal/win32ui/.*\.go
+        text: "G103|G115"
         linters:
           - gosec
       # The sync engine opens files under the local directory the user named on

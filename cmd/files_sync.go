@@ -16,7 +16,7 @@ import (
 // newFilesSyncCommand runs a two-way sync between a local directory and the
 // remote file tree, optionally as a continuous watch service.
 func newFilesSyncCommand() *cobra.Command {
-	var direction, conflict string
+	var direction, conflict, remote string
 	var interval time.Duration
 	var service bool
 
@@ -27,7 +27,9 @@ func newFilesSyncCommand() *cobra.Command {
 			"local files are uploaded, new/changed remote files are downloaded, and a\n" +
 			"file changed on both sides is resolved by --conflict. Deletions are NOT\n" +
 			"propagated (a missing file is never treated as a delete). With --service it\n" +
-			"keeps running, re-syncing on local changes and on --interval.",
+			"keeps running, re-syncing on local changes and on --interval.\n\n" +
+			"For several folders on a schedule, see `ledgerline-cli sync`, which\n" +
+			"remembers the list and is what the desktop tray runs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := args[0]
@@ -49,7 +51,7 @@ func newFilesSyncCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			opts := files.SyncOptions{Direction: direction, Conflict: conflict}
+			opts := files.SyncOptions{Direction: direction, Conflict: conflict, RemoteRoot: remote}
 			out := cmd.OutOrStdout()
 
 			if service {
@@ -80,6 +82,7 @@ func newFilesSyncCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&remote, "remote", "", "remote folder to sync against (default: the whole remote tree)")
 	cmd.Flags().StringVar(&direction, "direction", "both", "sync direction: both, push, or pull")
 	cmd.Flags().StringVar(&conflict, "conflict", "newest", "both-sides change policy: newest, keep-both, or skip")
 	cmd.Flags().DurationVar(&interval, "interval", 5*time.Minute, "re-sync interval in --service mode")

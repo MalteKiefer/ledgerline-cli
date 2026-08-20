@@ -207,11 +207,26 @@ release.
 
 ### `auth`
 
+Two ways in; both end in the same device-scoped token.
+
 ```sh
-ledgerline-cli auth login --server https://ledger.example.com --code <one-time-code>
+# credentials, with your second factor when the account has one
+ledgerline-cli auth login --server https://ledger.example.com --email you@example.com
+ledgerline-cli auth login --server … --email … --password-stdin < pw.txt --otp 123456
+ledgerline-cli auth login --server … --email … --recovery-code <code>
+
+# or a one-time code from the web profile, approved there
+ledgerline-cli auth pair --server https://ledger.example.com --code <one-time-code>
+
 ledgerline-cli auth status     # identity, storage usage, credential backend
 ledgerline-cli auth logout     # revoke server-side and clear local state
 ```
+
+The password is read from the terminal without echoing it, or from stdin with
+`--password-stdin`. `--password` exists but puts the secret in argv, where other
+users on the machine can read it. If the account has two-factor authentication
+and you pass no code, the command asks for one — the server will not issue a
+token before it is right.
 
 Device management (the same list the web profile shows):
 
@@ -320,24 +335,60 @@ would otherwise run three commands for. Its menu shows:
 - storage per module and in total: `Files: 1.0 GiB`, `Gallery: 512.0 MiB`,
   `Total: 1.5 GiB of 10.0 GiB (15%)` — files and gallery share one quota
 
-and offers **Sign in…**, **Sign out**, **Open web app**, **Refresh** and
-**Quit**. The icon is muted while you are signed out or the server cannot be
-reached; a failed refresh says so instead of showing stale numbers.
+and offers **Sign in…**, **Synced folders…**, **Sign out**, **Open web app**,
+**Refresh** and **Quit**. The icon is muted while you are signed out or the
+server cannot be reached; a failed refresh says so instead of showing stale
+numbers.
 
 It reads the same credential as the CLI, so signing in through either one signs
 in both, and it honours the same remote kill switch: a revoked device clears its
 credential on the next refresh.
 
-**Sign in…** opens a small dialog in your browser — served on `127.0.0.1` under
-a single-use address — asking for the server URL, the one-time code from your
-web profile and a name for this device. Your **password and second factor never
-reach this program**: you authenticate in the web app, and this client only
-handles the short-lived code and the token the server issues afterwards. The
-dialog refuses requests coming from any other page and shuts down when the flow
-finishes.
+**Sign in…** opens a proper window — no browser, no console — and lets you pick
+how you sign in:
+
+- **e-mail and password**, plus your two-factor code when the account has one.
+  The server refuses to issue a token until the code is right, so this route is
+  as gated as the web app; the code field can also take a recovery code.
+- **a one-time code** generated in your web profile and approved there. Nothing
+  but that code leaves the web app, so your password is never typed into this
+  program at all.
+
+**Synced folders…** is where the folder pairs live — see below.
 
 The state refreshes every five minutes, on demand via **Refresh**, and right
 after a sign-in or sign-out.
+
+### Synced folders
+
+One directory, once, is `files sync <dir>`. For a standing arrangement — several
+folders, each against its own remote folder, on a schedule — use the `sync`
+group, which the tray reads and writes as well:
+
+```sh
+ledgerline-cli sync add ~/Documents --remote Documents --interval 15m
+ledgerline-cli sync add ~/Pictures  --remote Photos --direction push
+ledgerline-cli sync ls
+ledgerline-cli sync set 2 --disable        # pause it; nothing is deleted
+ledgerline-cli sync run 1                  # sync one pair now
+ledgerline-cli sync run --all              # every enabled pair
+ledgerline-cli sync service                # keep running on each pair's schedule
+```
+
+In the tray, **Synced folders…** shows the same list with **Add folder…**
+(a folder picker; the remote folder defaults to the folder's own name),
+**Pause/Resume**, **Sync now**, **Sync all** and **Remove**. The tray runs due
+pairs in the background while it is open, so a laptop that is simply on stays
+up to date.
+
+Two things worth knowing:
+
+- **Removing a pair deletes nothing.** It stops the arrangement; the files stay
+  where they are, locally and on the server.
+- **Deletions are never propagated.** A file that is missing on one side is
+  treated as absent, not as an instruction to delete it on the other. Each pair
+  records what its last run did, including a failure, so a pair that quietly
+  stopped working is visible in `sync ls` and in the window.
 
 ### Organising: rename, move, trash, versions, labels
 
@@ -446,20 +497,29 @@ ledgerline-cli audit purge --yes
 
 ## How authentication works
 
-The CLI reuses the same server mechanism as the Ledgerline mobile app. The app
+**`auth login`** posts your e-mail and password to the server. If the account
+has a second factor, the server answers "not without the code" and issues
+nothing until a valid TOTP or recovery code arrives — the factor is enforced
+there, not here, so reaching the API directly does not skip it. Neither the
+password nor the code is written to disk.
+
+**`auth pair`** reuses the mechanism the Ledgerline mobile app uses. The app
 pairs by scanning a QR code; the CLI, having no camera, uses the same one-time
 code shown as copyable text.
 
 1. The web session (the trust anchor) generates a one-time code, valid for 60
    seconds, and shows it to you.
-2. `auth login` submits the code to the server, naming this device.
+2. `auth pair` submits the code to the server, naming this device.
 3. You approve the named device in the web app.
-4. The CLI collects a durable [Laravel Sanctum](https://laravel.com/docs/sanctum)
-   bearer token — issued exactly once — and stores it.
-5. Every later request sends `Authorization: Bearer <token>`.
+4. The CLI collects the token.
 
-The short-lived code is never written to disk. The token can be revoked at any
-time from the web profile's device list, or with `auth logout`.
+Either way the result is a durable [Laravel Sanctum](https://laravel.com/docs/sanctum)
+bearer token, verified against `/me` before it is stored, and sent as
+`Authorization: Bearer <token>` on every later request. Each sign-in also
+carries a stable per-installation id, so signing in again replaces this
+machine's entry in the device list instead of adding another one. The token can
+be revoked at any time from the web profile's device list, or with
+`auth logout`.
 
 ## Security notes
 
@@ -522,8 +582,10 @@ internal/api/           typed /api/v1 client; files split by feature area
 internal/files/         local helpers: tree render, two-way sync, watch service
 internal/webdavfs/      webdav.FileSystem over the Files API (the mount backend)
 internal/trayui/        tray menu model, avatar and brand icons (platform-free, tested)
-internal/loginui/       browser sign-in dialog served on loopback
-internal/pairflow/      claim -> approve -> verify -> store, shared by CLI and GUI
+internal/win32ui/       tiny Win32 toolkit: window, fields, buttons, list, folder picker
+internal/authflow/      password (+2FA) and one-time-code sign-in, shared by CLI and GUI
+internal/syncconfig/    the folder pairs, shared by the CLI and the tray
+internal/installid/     stable per-installation id, so a re-login replaces its device
 internal/clientset/     stored session -> pinned, authenticated API client
 internal/gallery/       media-file walking, upload naming
 internal/uploadledger/  per-server SHA-256 dedup ledger

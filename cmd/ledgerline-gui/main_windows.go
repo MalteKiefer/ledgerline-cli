@@ -53,6 +53,7 @@ type app struct {
 	title   *systray.MenuItem
 	lines   []*systray.MenuItem
 	login   *systray.MenuItem
+	sync    *systray.MenuItem
 	logout  *systray.MenuItem
 	openWeb *systray.MenuItem
 	refresh *systray.MenuItem
@@ -62,6 +63,8 @@ type app struct {
 	avatarApplied bool
 	// loginBusy keeps a second sign-in dialog from opening over the first.
 	loginBusy atomic.Bool
+	// syncBusy does the same for the folder window, which writes the same file.
+	syncBusy atomic.Bool
 }
 
 func newApp() *app { return &app{state: trayui.State{Version: version.Version}} }
@@ -86,12 +89,17 @@ func (a *app) onReady() {
 	}
 	systray.AddSeparator()
 
-	a.login = systray.AddMenuItem("Sign in…", "Pair this computer with a Ledgerline server")
+	a.login = systray.AddMenuItem("Sign in…", "Sign in to a Ledgerline server")
+	a.sync = systray.AddMenuItem("Synced folders…", "Choose which folders stay in sync")
 	a.openWeb = systray.AddMenuItem("Open web app", "Open the server in your browser")
 	a.logout = systray.AddMenuItem("Sign out", "Revoke this device's token")
 	systray.AddSeparator()
 	a.refresh = systray.AddMenuItem("Refresh", "Re-read identity and storage now")
 	a.quit = systray.AddMenuItem("Quit", "Close the tray icon")
+
+	// The folder pairs run whether or not their window is open; that is the
+	// point of a tray application.
+	startSyncRunner(context.Background())
 
 	go a.loop()
 }
@@ -107,6 +115,8 @@ func (a *app) loop() {
 		select {
 		case <-a.login.ClickedCh:
 			a.startLogin()
+		case <-a.sync.ClickedCh:
+			a.openSyncWindow()
 		case <-a.logout.ClickedCh:
 			a.doLogout()
 		case <-a.openWeb.ClickedCh:
@@ -259,6 +269,18 @@ func (a *app) startLogin() {
 		// outcome, the tray simply re-reads the credential afterwards.
 		runLoginDialog(lastServer)
 		a.reload()
+	}()
+}
+
+// openSyncWindow shows the folder list. Like the sign-in dialog it runs on its
+// own OS thread, so a long list or a running sync never freezes the tray.
+func (a *app) openSyncWindow() {
+	if !a.syncBusy.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer a.syncBusy.Store(false)
+		runSyncWindow()
 	}()
 }
 

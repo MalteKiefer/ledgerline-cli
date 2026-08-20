@@ -35,6 +35,12 @@ const (
 type SyncOptions struct {
 	Direction string // both | push | pull
 	Conflict  string // newest | keep-both | skip
+
+	// RemoteRoot scopes the sync to one remote folder, given as a slash path
+	// ("Documents/Work"). Empty means the whole tree. Without it a second local
+	// directory could only ever be a second copy of the same remote root, which
+	// is why more than one sync pair needs it.
+	RemoteRoot string
 }
 
 // SyncResult counts what one pass did.
@@ -63,6 +69,9 @@ func Sync(ctx context.Context, c *api.Client, localDir string, opts SyncOptions,
 	}
 
 	rm := newRemoteModel(folders, files)
+	if err := rm.scopeTo(opts.RemoteRoot); err != nil {
+		return res, err
+	}
 	local, err := scanLocal(localDir)
 	if err != nil {
 		return res, err
@@ -239,9 +248,13 @@ func sha256File(p string) (string, error) {
 // --- remote model ---
 
 type remoteModel struct {
-	fileByPath map[string]api.FileEntry // slash path relative to root -> file
-	folderIDs  map[string]int64         // slash folder path -> folder id
+	fileByPath map[string]api.FileEntry // slash path relative to the sync root -> file
+	folderIDs  map[string]int64         // slash folder path (absolute) -> folder id
 	folderByID map[int64]api.FileFolder
+
+	// root is the remote folder this sync is scoped to, "" for the whole tree.
+	// Paths handed to and returned by this model are relative to it.
+	root string
 }
 
 func newRemoteModel(folders []api.FileFolder, files []api.FileEntry) *remoteModel {
@@ -264,6 +277,43 @@ func newRemoteModel(folders []api.FileFolder, files []api.FileEntry) *remoteMode
 		rm.fileByPath[joinRel(dir, file.Name)] = file
 	}
 	return rm
+}
+
+// scopeTo restricts the model to a remote folder: entries outside it disappear,
+// and the rest are re-keyed relative to it. Pushing into a root that does not
+// exist yet is fine — it is created on the first upload.
+func (rm *remoteModel) scopeTo(root string) error {
+	root = strings.Trim(strings.ReplaceAll(root, "\\", "/"), "/")
+	if root == "" {
+		return nil
+	}
+	for _, part := range strings.Split(root, "/") {
+		if part == "." || part == ".." {
+			return fmt.Errorf("invalid remote folder %q", root)
+		}
+	}
+	rm.root = root
+
+	prefix := root + "/"
+	scoped := make(map[string]api.FileEntry, len(rm.fileByPath))
+	for p, f := range rm.fileByPath {
+		if rel, ok := strings.CutPrefix(p, prefix); ok {
+			scoped[rel] = f
+		}
+	}
+	rm.fileByPath = scoped
+	return nil
+}
+
+// absolute turns a path relative to the sync root into a full remote path.
+func (rm *remoteModel) absolute(rel string) string {
+	if rm.root == "" {
+		return rel
+	}
+	if rel == "" {
+		return rm.root
+	}
+	return rm.root + "/" + rel
 }
 
 // folderPath builds a folder's slash path by walking parent links.
@@ -321,7 +371,7 @@ func (rm *remoteModel) pushNew(ctx context.Context, c *api.Client, localDir, rel
 	if dir == "." {
 		dir = ""
 	}
-	folderID, err := rm.ensureFolder(ctx, c, dir)
+	folderID, err := rm.ensureFolder(ctx, c, rm.absolute(dir))
 	if err != nil {
 		return err
 	}
