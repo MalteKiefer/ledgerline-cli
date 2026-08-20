@@ -1,4 +1,4 @@
-package pairflow
+package authflow
 
 import (
 	"context"

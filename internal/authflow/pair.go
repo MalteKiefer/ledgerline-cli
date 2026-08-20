@@ -1,14 +1,8 @@
-// Package pairflow drives the device-pairing exchange: claim a one-time code,
-// wait for the owner to approve the device in the web app, verify the issued
-// token and store the session. The CLI prompts for the code on a terminal and
-// the tray GUI collects it in a local browser dialog; both need the same
-// sequence, so it lives here rather than in either front end.
-//
-// This client never sees a password or a second factor: the user signs in to the
-// web app (with whatever two-factor step their account has) to get the code and
-// to approve the device. All that crosses this boundary is a short-lived code
-// and, on success, a bearer token.
-package pairflow
+// Pairing: claim a one-time code, wait for the owner to approve the device in
+// the web app, verify the issued token and store the session. Used by
+// `auth pair` and by the tray GUI's pairing option.
+
+package authflow
 
 import (
 	"context"

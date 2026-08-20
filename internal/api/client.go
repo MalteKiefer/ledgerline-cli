@@ -184,6 +184,11 @@ type APIError struct {
 	// (Code == "version_conflict"); the caller should re-fetch, merge and retry
 	// with this version. Zero when not applicable.
 	Version int
+	// TwoFactor is true when the login endpoint answered {two_factor:true},
+	// meaning the account has a confirmed second factor and the request carried
+	// no valid TOTP or recovery code. That body has no message of its own, so
+	// without this flag the caller could not tell it from bad credentials.
+	TwoFactor bool
 }
 
 // Error implements error.
@@ -389,15 +394,21 @@ func decodeError(resp *http.Response) error {
 
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var envelope struct {
-		Message string              `json:"message"`
-		Error   string              `json:"error"`
-		Errors  map[string][]string `json:"errors"`
-		Version int                 `json:"version"`
+		Message   string              `json:"message"`
+		Error     string              `json:"error"`
+		Errors    map[string][]string `json:"errors"`
+		Version   int                 `json:"version"`
+		TwoFactor bool                `json:"two_factor"`
+		Status    string              `json:"status"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil {
 		apiErr.Message = envelope.Message
 		apiErr.Code = envelope.Error
 		apiErr.Fields = envelope.Errors
+		apiErr.TwoFactor = envelope.TwoFactor
+		if apiErr.Code == "" {
+			apiErr.Code = envelope.Status // e.g. {"status":"verify-email"}
+		}
 		apiErr.Version = envelope.Version
 	}
 	return apiErr

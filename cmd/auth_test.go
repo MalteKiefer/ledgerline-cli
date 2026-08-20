@@ -44,12 +44,12 @@ func TestAuthLoginEndToEnd(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	// Non-interactive: pass server and code as flags so no prompt is needed.
-	root.SetArgs([]string{"auth", "login", "--server", srv.URL, "--code", "pasted-code", "--device-name", "ci-runner"})
+	root.SetArgs([]string{"auth", "pair", "--server", srv.URL, "--code", "pasted-code", "--device-name", "ci-runner"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("login: %v\noutput:\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "Logged in as Grace") {
+	if !strings.Contains(out.String(), "Signed in as Grace") {
 		t.Fatalf("unexpected output:\n%s", out.String())
 	}
 
@@ -81,10 +81,12 @@ func TestAuthLoginExpiredCode(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"auth", "login", "--server", srv.URL, "--code", "old"})
+	root.SetArgs([]string{"auth", "pair", "--server", srv.URL, "--code", "old"})
 
 	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("expected an expiry error, got %v", err)
+	// The shared flow answers 404/410/422 with one message: the code is no good,
+	// and it may simply have aged out.
+	if err == nil || !strings.Contains(err.Error(), "expires") {
+		t.Fatalf("expected a rejected-code error, got %v", err)
 	}
 }

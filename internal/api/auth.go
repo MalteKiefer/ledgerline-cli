@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strconv"
 )
@@ -107,6 +108,51 @@ func (c *Client) PollPair(ctx context.Context, code string) (PairStatus, *PairRe
 		return PairPending, nil, nil
 	}
 	return PairApproved, &PairResult{Token: resp.Token, User: resp.User}, nil
+}
+
+// LoginRequest is a password sign-in. Code and RecoveryCode are the account's
+// second factor; exactly one of them is sent, and only when the server asked
+// for it. InstallID makes the server register this installation as a device
+// (revocable, wipeable, and replacing its own previous slot) instead of minting
+// a bare token.
+type LoginRequest struct {
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	Code         string `json:"code,omitempty"`
+	RecoveryCode string `json:"recovery_code,omitempty"`
+	DeviceName   string `json:"device_name,omitempty"`
+	InstallID    string `json:"install_id,omitempty"`
+	AppVersion   string `json:"app_version,omitempty"`
+	OSVersion    string `json:"os_version,omitempty"`
+}
+
+// LoginResult carries the issued bearer and the identity behind it.
+type LoginResult struct {
+	Token string
+	User  User
+}
+
+// Login exchanges credentials for a device-scoped bearer token.
+//
+// Failure modes worth branching on, all *APIError:
+//   - 422 with TwoFactor: the account has a confirmed second factor and none was
+//     supplied (or it was wrong). Ask for it and retry the same call.
+//   - 422 otherwise: wrong credentials — deliberately indistinguishable from a
+//     blocked account, so do not guess which it was in the message.
+//   - 403 with Code "verify-email": the address is unverified; no token exists
+//     to hand out until it is.
+func (c *Client) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
+	var resp struct {
+		Token string `json:"token"`
+		User  User   `json:"user"`
+	}
+	if err := c.request(ctx, "POST", "/api/v1/auth/login", req, &resp); err != nil {
+		return LoginResult{}, err
+	}
+	if resp.Token == "" {
+		return LoginResult{}, errors.New("the server accepted the credentials but issued no token")
+	}
+	return LoginResult{Token: resp.Token, User: resp.User}, nil
 }
 
 // Me returns the authenticated user, storage usage, and whether the owner has

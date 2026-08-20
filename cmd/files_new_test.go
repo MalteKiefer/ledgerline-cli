@@ -34,7 +34,7 @@ func loggedInRoot(t *testing.T, mux *http.ServeMux) *bytes.Buffer {
 	var out bytes.Buffer
 	login.SetOut(&out)
 	login.SetErr(&out)
-	login.SetArgs([]string{"auth", "login", "--server", srv.URL, "--code", "pasted-code", "--device-name", "ci-runner"})
+	login.SetArgs([]string{"auth", "pair", "--server", srv.URL, "--code", "pasted-code", "--device-name", "ci-runner"})
 	if err := login.Execute(); err != nil {
 		t.Fatalf("login: %v\noutput:\n%s", err, out.String())
 	}

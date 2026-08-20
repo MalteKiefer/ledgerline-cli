@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -15,9 +15,10 @@ import (
 // box), so every high-value secret has a stdin path and the private-key
 // passphrase has ONLY that path.
 func readSecretStdin(cmd *cobra.Command) (string, error) {
-	reader := bufio.NewReader(cmd.InOrStdin())
-	line, err := reader.ReadString('\n')
-	line = strings.TrimRight(line, "\r\n")
+	// Read a byte at a time rather than through a buffered reader: stdin may
+	// carry more than this one secret (a piped password followed by a prompted
+	// two-factor code), and a buffer would swallow the rest of it.
+	line, err := readLine(cmd.InOrStdin())
 	if err != nil && line == "" {
 		return "", errors.New("no secret on stdin")
 	}
@@ -25,6 +26,24 @@ func readSecretStdin(cmd *cobra.Command) (string, error) {
 		return "", errors.New("empty secret on stdin")
 	}
 	return line, nil
+}
+
+// readLine consumes exactly one line from r, without reading ahead.
+func readLine(r io.Reader) (string, error) {
+	var b strings.Builder
+	buf := make([]byte, 1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if buf[0] == '\n' {
+				return strings.TrimRight(b.String(), "\r"), nil
+			}
+			b.WriteByte(buf[0])
+		}
+		if err != nil {
+			return strings.TrimRight(b.String(), "\r"), err
+		}
+	}
 }
 
 // secretFlag resolves a secret that can arrive either as --<name> (convenient,

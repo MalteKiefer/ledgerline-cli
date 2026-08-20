@@ -25,7 +25,6 @@ import (
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/clientset"
-	"github.com/MalteKiefer/ledgerline-cli/internal/loginui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/trayui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/version"
@@ -41,9 +40,6 @@ const requestTimeout = 20 * time.Second
 
 // statusSlots is how many non-clickable menu rows the tray reserves.
 const statusSlots = 5
-
-// loginDialogTimeout bounds how long the local sign-in page stays served.
-const loginDialogTimeout = 15 * time.Minute
 
 func main() {
 	systray.Run(newApp().onReady, func() {})
@@ -236,46 +232,32 @@ func setVisible(item *systray.MenuItem, show bool) {
 	item.Hide()
 }
 
-// startLogin opens the graphical sign-in dialog: a page served on loopback,
-// shown in the user's browser. Pairing needs a one-time code copied from the web
-// app, so the user is in a browser already, and a page gives them a real text
-// field with working clipboard and IME — neither of which a tray menu has, and
-// without the console window a terminal-based prompt would throw in their face.
+// startLogin opens the sign-in window: a real dialog, not a browser page and
+// not a console. The user picks the method — e-mail and password with the
+// account's second factor, or a one-time code approved in the web app — because
+// both are legitimate: the password route is fewer steps, the code route never
+// types the password into a desktop program.
 //
-// No password or second factor passes through here: those happen in the web app,
-// which is where the code and the device approval come from.
+// The dialog runs on its own OS thread with its own message loop, so it cannot
+// block the tray, and only one may be open at a time: two would race on the
+// stored credential.
 func (a *app) startLogin() {
 	if !a.loginBusy.CompareAndSwap(false, true) {
-		return // a dialog is already open; a second one would race on the session
-	}
-	dialog := loginui.New(deviceName())
-	url, err := dialog.Start(context.Background())
-	if err != nil {
-		a.loginBusy.Store(false)
-		a.setState(trayui.State{Version: version.Version, Err: err})
 		return
 	}
-	openURL(url)
-
 	go func() {
 		defer a.loginBusy.Store(false)
-		defer dialog.Close()
-		// Bounded: the dialog must not outlive a user who closed the tab and
-		// walked away, and its listener is a local open port until it does.
-		ctx, cancel := context.WithTimeout(context.Background(), loginDialogTimeout)
-		defer cancel()
-		phase, message := dialog.Wait(ctx)
-		switch phase {
-		case loginui.PhaseDone:
-			// Let the browser fetch the success state before the server closes.
-			time.Sleep(2 * time.Second)
-		case loginui.PhaseError:
-			a.setState(trayui.State{Version: version.Version, Err: errors.New(message)})
-			return
-		default:
-			// Cancelled or timed out: fall through and refresh, which will show
-			// the signed-out state the user still has.
+
+		// Prefill the server from a previous session so re-signing in after a
+		// revoked token is one field shorter.
+		var lastServer string
+		if sess, err := session.Load(); err == nil {
+			lastServer = sess.ServerURL
 		}
+
+		// Errors are shown in the dialog itself while it is open; whatever the
+		// outcome, the tray simply re-reads the credential afterwards.
+		runLoginDialog(lastServer)
 		a.reload()
 	}()
 }
