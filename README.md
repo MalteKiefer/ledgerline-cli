@@ -317,7 +317,8 @@ would otherwise run three commands for. Its menu shows:
 - the client version
 - the signed-in account, with its profile picture as the item's icon
 - the server host
-- storage usage, e.g. `Storage: 1.5 GiB of 10.0 GiB (15%)`
+- storage per module and in total: `Files: 1.0 GiB`, `Gallery: 512.0 MiB`,
+  `Total: 1.5 GiB of 10.0 GiB (15%)` — files and gallery share one quota
 
 and offers **Sign in…**, **Sign out**, **Open web app**, **Refresh** and
 **Quit**. The icon is muted while you are signed out or the server cannot be
@@ -325,9 +326,15 @@ reached; a failed refresh says so instead of showing stale numbers.
 
 It reads the same credential as the CLI, so signing in through either one signs
 in both, and it honours the same remote kill switch: a revoked device clears its
-credential on the next refresh. **Sign in…** opens `ledgerline-cli auth login`
-in a console window, because pairing needs the one-time code you copy from the
-web profile.
+credential on the next refresh.
+
+**Sign in…** opens a small dialog in your browser — served on `127.0.0.1` under
+a single-use address — asking for the server URL, the one-time code from your
+web profile and a name for this device. Your **password and second factor never
+reach this program**: you authenticate in the web app, and this client only
+handles the short-lived code and the token the server issues afterwards. The
+dialog refuses requests coming from any other page and shuts down when the flow
+finishes.
 
 The state refreshes every five minutes, on demand via **Refresh**, and right
 after a sign-in or sign-out.
@@ -515,6 +522,8 @@ internal/api/           typed /api/v1 client; files split by feature area
 internal/files/         local helpers: tree render, two-way sync, watch service
 internal/webdavfs/      webdav.FileSystem over the Files API (the mount backend)
 internal/trayui/        tray menu model, avatar and brand icons (platform-free, tested)
+internal/loginui/       browser sign-in dialog served on loopback
+internal/pairflow/      claim -> approve -> verify -> store, shared by CLI and GUI
 internal/clientset/     stored session -> pinned, authenticated API client
 internal/gallery/       media-file walking, upload naming
 internal/uploadledger/  per-server SHA-256 dedup ledger

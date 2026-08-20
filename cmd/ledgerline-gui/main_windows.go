@@ -16,14 +16,16 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/clientset"
+	"github.com/MalteKiefer/ledgerline-cli/internal/loginui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/trayui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/version"
@@ -36,6 +38,12 @@ const refreshInterval = 5 * time.Minute
 
 // requestTimeout bounds one refresh so a hung server cannot wedge the menu.
 const requestTimeout = 20 * time.Second
+
+// statusSlots is how many non-clickable menu rows the tray reserves.
+const statusSlots = 5
+
+// loginDialogTimeout bounds how long the local sign-in page stays served.
+const loginDialogTimeout = 15 * time.Minute
 
 func main() {
 	systray.Run(newApp().onReady, func() {})
@@ -56,6 +64,8 @@ type app struct {
 
 	// avatarApplied guards against re-encoding the same avatar on every refresh.
 	avatarApplied bool
+	// loginBusy keeps a second sign-in dialog from opening over the first.
+	loginBusy atomic.Bool
 }
 
 func newApp() *app { return &app{state: trayui.State{Version: version.Version}} }
@@ -69,9 +79,10 @@ func (a *app) onReady() {
 	a.title.Disable()
 	systray.AddSeparator()
 
-	// Three status slots are allocated up front: systray cannot remove items, so
-	// the renderer shows or hides fixed slots instead of rebuilding the menu.
-	for range 3 {
+	// Status slots are allocated up front: systray cannot remove items, so the
+	// renderer shows or hides fixed slots instead of rebuilding the menu. Five
+	// covers account, server, files, gallery and the total.
+	for range statusSlots {
 		item := systray.AddMenuItem("", "")
 		item.Disable()
 		item.Hide()
@@ -225,26 +236,57 @@ func setVisible(item *systray.MenuItem, show bool) {
 	item.Hide()
 }
 
-// startLogin runs `ledgerline-cli auth login` in a console window. Pairing needs
-// a server URL and a one-time code typed by the user; a tray menu has no text
-// input, and re-implementing the prompt in a GUI would duplicate the flow the
-// CLI already owns.
+// startLogin opens the graphical sign-in dialog: a page served on loopback,
+// shown in the user's browser. Pairing needs a one-time code copied from the web
+// app, so the user is in a browser already, and a page gives them a real text
+// field with working clipboard and IME — neither of which a tray menu has, and
+// without the console window a terminal-based prompt would throw in their face.
+//
+// No password or second factor passes through here: those happen in the web app,
+// which is where the code and the device approval come from.
 func (a *app) startLogin() {
-	cli := cliPath()
-	// `cmd /c start` gives the CLI its own console: this process is built with
-	// -H=windowsgui and has none to inherit. The console is deliberately tied to
-	// context.Background(), not to the tray's lifetime: quitting the tray must
-	// not kill a sign-in the user is halfway through typing.
-	cmd := exec.CommandContext(context.Background(), "cmd", "/c", "start", "Ledgerline sign-in", "/wait", cli, "auth", "login")
-	if err := cmd.Start(); err != nil {
+	if !a.loginBusy.CompareAndSwap(false, true) {
+		return // a dialog is already open; a second one would race on the session
+	}
+	dialog := loginui.New(deviceName())
+	url, err := dialog.Start(context.Background())
+	if err != nil {
+		a.loginBusy.Store(false)
 		a.setState(trayui.State{Version: version.Version, Err: err})
 		return
 	}
-	// Pick the new session up once the user is done, without blocking the menu.
+	openURL(url)
+
 	go func() {
-		_ = cmd.Wait()
+		defer a.loginBusy.Store(false)
+		defer dialog.Close()
+		// Bounded: the dialog must not outlive a user who closed the tab and
+		// walked away, and its listener is a local open port until it does.
+		ctx, cancel := context.WithTimeout(context.Background(), loginDialogTimeout)
+		defer cancel()
+		phase, message := dialog.Wait(ctx)
+		switch phase {
+		case loginui.PhaseDone:
+			// Let the browser fetch the success state before the server closes.
+			time.Sleep(2 * time.Second)
+		case loginui.PhaseError:
+			a.setState(trayui.State{Version: version.Version, Err: errors.New(message)})
+			return
+		default:
+			// Cancelled or timed out: fall through and refresh, which will show
+			// the signed-out state the user still has.
+		}
 		a.reload()
 	}()
+}
+
+// deviceName is what the account owner sees in the web app's device list.
+func deviceName() string {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "Windows desktop"
+	}
+	return host
 }
 
 // doLogout revokes server-side and clears the local credential in-process: it
@@ -261,6 +303,14 @@ func (a *app) doLogout() {
 	a.reload()
 }
 
+// openURL hands a local or configured URL to the shell. rundll32 avoids
+// `cmd /c start`'s argument mangling of URLs containing &. Background context:
+// the handoff outlives this click, and cancelling it mid-launch would just fail
+// to open the browser.
+func openURL(target string) {
+	_ = exec.CommandContext(context.Background(), "rundll32", "url.dll,FileProtocolHandler", target).Start()
+}
+
 // openBrowser opens the configured server in the default browser.
 func (a *app) openBrowser() {
 	a.mu.Lock()
@@ -273,23 +323,7 @@ func (a *app) openBrowser() {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return
 	}
-	// rundll32 avoids `cmd /c start`'s argument mangling of URLs containing &.
-	// Background context again: the handoff outlives this click, and cancelling
-	// it mid-launch would just fail to open the browser.
-	_ = exec.CommandContext(context.Background(), "rundll32", "url.dll,FileProtocolHandler", u.String()).Start()
-}
-
-// cliPath prefers the CLI sitting next to this binary (how the installer lays
-// them out) and falls back to PATH.
-func cliPath() string {
-	const name = "ledgerline-cli.exe"
-	if self, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(self), name)
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			return candidate
-		}
-	}
-	return name
+	openURL(u.String())
 }
 
 // limitedBuffer collects an avatar with a hard ceiling, so a hostile or broken

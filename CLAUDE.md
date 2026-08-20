@@ -117,12 +117,18 @@ the pivot). What the CLI still protects:
   lives in a temp file removed when the handle closes, and a delete through the
   mount trashes server-side rather than force-deleting, so a file manager's
   stray delete stays recoverable.
+- **Sign-in dialog:** served on 127.0.0.1 on an ephemeral port, reachable only
+  under a 128-bit per-run path token (an unknown token is a flat 404), refusing
+  cross-origin form posts, under a strict default-src 'none' CSP with no
+  external asset, and shut down when the flow ends or after 15 minutes. It
+  renders no secret back into the page — not the code, not the bearer — and a
+  failed attempt stores nothing.
 - **Tray GUI:** shares the CLI's credential, pins and kill switch — it calls
   `/me` on every refresh, clears the credential on a 401 and wipes on a pending
   remote wipe, exactly as the CLI does. It launches two subprocesses, both as
-  argv arrays with no shell: the CLI next to its own executable (sign-in), and
-  rundll32 with the configured server URL, which is scheme-checked to http(s)
-  first so a tampered config cannot turn a menu click into a shell action. The
+  argv arrays with no shell: rundll32 with the configured server URL, which is
+  scheme-checked to http(s) first so a tampered config cannot turn a menu click
+  into a shell action, and rundll32 again to open the local sign-in dialog. The
   avatar it fetches is capped at 4 MiB.
 - **Audit trail:** local-only JSONL metadata (§7); never content or secrets.
 
@@ -145,6 +151,8 @@ internal/gallery/       local helpers: media-file walking, upload naming
 internal/files/         local helpers: folder-tree render (tree.go) + two-way sync (sync.go) + watch service (watch.go)
 internal/webdavfs/      webdav.FileSystem over internal/api (the `files webdav` mount backend)
 internal/trayui/        tray menu model + avatar/brand icon rendering (platform-free, unit tested)
+internal/loginui/       graphical sign-in: a loopback, token-gated HTML dialog opened in the browser
+internal/pairflow/      claim -> approve -> verify -> store, shared by every front end
 internal/clientset/     one place that turns the stored session into a pinned, authenticated client
 packaging/nfpm.yaml     .deb / .rpm recipe
 packaging/windows/      NSIS installer (CLI + tray GUI, Start menu, PATH, autostart)
@@ -249,10 +257,15 @@ audit show|path|purge             local audit trail
 
 The desktop GUI (`ledgerline-gui`, Windows) is a tray icon, not a second
 command surface: it shows the version, the signed-in account (with its avatar),
-the server host and the storage usage, and offers Sign in / Sign out / Open web
-app / Refresh / Quit. Sign-in shells out to `ledgerline-cli auth login` in a
-console because pairing needs a one-time code the user pastes; everything else
-runs in-process against the same session and pinned client.
+the server host and the storage usage broken out per module (files, gallery,
+total against the shared quota), and offers Sign in / Sign out / Open web app /
+Refresh / Quit. Sign-in opens the `internal/loginui` dialog — a page served on
+loopback under a per-run path token, shown in the user's browser — because
+pairing needs a one-time code copied from the web app; no console window is
+involved. Everything else runs in-process against the same session and pinned
+client. **No password or second factor passes through this client at all**: the
+user authenticates in the web app (with their own 2FA), and only the short-lived
+pairing code and the issued bearer cross this boundary.
 
 Secret handling: every share/archive/upload-link password flag has a
 `--password-stdin` twin so the secret never reaches argv; a private-key
@@ -297,8 +310,10 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   therefore breaks the static build the release assumes) are separate slices;
   `cmd/ledgerline-gui/main_other.go` is a stub that says so rather than
   pretending.
-- The tray shows state and signs in/out. It does not yet expose sync, the
-  WebDAV mount, or notifications — those are the obvious next slices, and each
+- The tray shows state and signs in/out (the sign-in dialog is a browser page;
+  a native window would mean either a hand-rolled Win32 dialog template or a
+  GUI toolkit that needs CGO and would break the static build). It does not yet
+  expose sync, the WebDAV mount, or notifications — those are the obvious next slices, and each
   needs a decision about what a tray should do when a long operation fails.
 - The Windows installer is NSIS, chosen because it cross-builds on the Linux
   release runner. Group Policy deployment would want an MSI (WiX on a Windows
@@ -321,6 +336,20 @@ a future desktop sync client), but nothing is CLI-less by design any more.
 
 ## 10. Changelog
 
+- 2026-08-20 feat: **graphical sign-in + per-module storage in the tray.**
+  Sign-in no longer opens a console: `internal/loginui` serves a small dialog on
+  loopback under a per-run path token and opens it in the browser — which is
+  where the pairing code comes from anyway, and where the clipboard and IME just
+  work. The pairing sequence moved into `internal/pairflow` (claim → wait for
+  approval → verify the token → store), so terminal and dialog share one
+  implementation and one set of error messages. Nine tests drive the dialog over
+  real HTTP: the 404 for a wrong path token, the cross-origin refusal, retrying
+  after a rejected code, and that neither the page nor the status endpoint ever
+  echoes the code or the bearer. The tray now breaks storage out per module
+  (Files / Gallery / Total against the shared quota) instead of one summed line.
+  Worth stating because it is a recurring question: **no password and no second
+  factor ever reach this client** — the user authenticates in the web app, and
+  only the short-lived code and the issued token cross the boundary.
 - 2026-08-20 feat: **Windows tray GUI + one installer for both programs.** New
   `cmd/ledgerline-gui` (build-tagged windows; a stub elsewhere) draws a tray
   icon whose menu shows the version, the signed-in account with its avatar, the

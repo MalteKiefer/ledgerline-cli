@@ -48,7 +48,11 @@ func TestBuildSignedIn(t *testing.T) {
 	if m.ShowLogin || !m.ShowLogout || !m.ShowOpenWeb || m.Offline {
 		t.Fatalf("actions = %+v", m)
 	}
-	want := []string{"Grace", "ledger.example.com:8443", "Storage: 1.5 GiB of 10.0 GiB (15%)"}
+	want := []string{
+		"Grace", "ledger.example.com:8443",
+		// Per-module figures, then the total the quota applies to.
+		"Files: 1.0 GiB", "Gallery: 512.0 MiB", "Total: 1.5 GiB of 10.0 GiB (15%)",
+	}
 	if len(m.Lines) != len(want) {
 		t.Fatalf("lines = %v", m.Lines)
 	}
@@ -76,7 +80,7 @@ func TestBuildRefreshErrorDoesNotShowStaleNumbers(t *testing.T) {
 		t.Fatal("a failed refresh must mute the icon")
 	}
 	for _, l := range m.Lines {
-		if strings.Contains(l, "Storage") {
+		if strings.Contains(l, "Total") || strings.Contains(l, "Files:") {
 			t.Fatalf("storage shown despite a failed refresh: %v", m.Lines)
 		}
 	}
@@ -264,5 +268,23 @@ func TestBrandIconIsAValidIconAndDiffersByState(t *testing.T) {
 	// Cached: a second call must hand back the same slice, not redraw.
 	if &BrandIcon(true)[0] != &active[0] {
 		t.Fatal("BrandIcon redrew instead of using its cache")
+	}
+}
+
+func TestUsageLinesSplitPerModule(t *testing.T) {
+	lines := UsageLines(api.Usage{Files: 3 << 20, Gallery: 5 << 20, Quota: ptr(16 << 20)})
+	want := []string{"Files: 3.0 MiB", "Gallery: 5.0 MiB", "Total: 8.0 MiB of 16.0 MiB (50%)"}
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %v", lines)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, lines[i], want[i])
+		}
+	}
+	// A module with nothing in it still gets a line: "0 B" is an answer, a
+	// missing row looks like a bug.
+	if got := UsageLines(api.Usage{})[1]; got != "Gallery: 0 B" {
+		t.Fatalf("empty gallery line = %q", got)
 	}
 }

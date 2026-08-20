@@ -74,11 +74,7 @@ func Build(s State) Model {
 		return m
 	}
 
-	m.Lines = []string{
-		nameLine(s.UserName, s.UserEmail),
-		host,
-		"Storage: " + StorageLine(s.Usage),
-	}
+	m.Lines = append([]string{nameLine(s.UserName, s.UserEmail), host}, UsageLines(s.Usage)...)
 	m.Tooltip += " — " + nameLine(s.UserName, s.UserEmail) + " @ " + host
 	return m
 }
@@ -120,9 +116,19 @@ func ServerHost(raw string) string {
 	return u.Host
 }
 
-// StorageLine renders usage as "1.4 GiB of 10.0 GiB (14%)", or without the
-// quota part when the account is unlimited. Files and gallery share one quota
-// on the server, so they are summed here too.
+// UsageLines breaks the storage figures out per module, because "how much are my
+// photos using" is the question a total cannot answer. Files and gallery share
+// one quota on the server, so the total is what the quota applies to.
+func UsageLines(u api.Usage) []string {
+	return []string{
+		"Files: " + ui.HumanBytes(u.Files),
+		"Gallery: " + ui.HumanBytes(u.Gallery),
+		"Total: " + StorageLine(u),
+	}
+}
+
+// StorageLine renders the combined usage as "1.4 GiB of 10.0 GiB (14%)", or
+// without the quota part when the account is unlimited.
 func StorageLine(u api.Usage) string {
 	used := u.Files + u.Gallery
 	if u.Quota == nil || *u.Quota <= 0 {

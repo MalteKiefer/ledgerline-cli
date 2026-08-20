@@ -10,11 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Windows tray application (`ledgerline-gui`).** A tray icon showing the
-  version, the signed-in account with its profile picture, the server and the
-  storage usage, with Sign in, Sign out, Open web app, Refresh and Quit in its
-  menu. It shares the CLI's credential, certificate pins and remote kill
-  switch, so both see the same session; signing in opens the CLI in a console,
-  because pairing needs a one-time code you paste.
+  version, the signed-in account with its profile picture, the server, and your
+  storage broken out per module — Files, Gallery, and the total against your
+  quota — with Sign in, Sign out, Open web app, Refresh and Quit in its menu. It
+  shares the CLI's credential, certificate pins and remote kill switch, so both
+  see the same session.
+- **Graphical sign-in.** Signing in from the tray opens a small dialog in your
+  browser instead of a console window: server, one-time code, device name. Your
+  password and your second factor stay in the web app — this client only ever
+  handles the short-lived pairing code and the token your server issues. The
+  dialog is served on 127.0.0.1 under a single-use address, refuses requests
+  coming from other pages, and shuts itself down when it is done.
 - **Windows installer.** One setup .exe per architecture installs both the CLI
   and the tray application, creates Start-menu shortcuts, optionally adds the
   install directory to PATH and optionally starts the tray at sign-in, and
