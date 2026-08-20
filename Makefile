@@ -167,25 +167,32 @@ installer-windows: release
 # regeneration from a Windows or macOS workstation produces the same committed
 # file instead of one whose purls all carry that host's goos/goarch — which
 # sbom-verify would then reject as drift.
+#
+# It applies to the ANALYSIS, not to building the generator: `go run` obeys
+# GOOS too, so setting it up front produced a Linux binary the workstation then
+# could not execute ("executable file not found"). The tool is therefore built
+# for the host first and run with the pinned environment afterwards.
 SBOM_ENV := GOOS=linux GOARCH=amd64
+SBOM_TOOL := $(shell go env GOPATH)/bin/cyclonedx-gomod$(shell go env GOEXE)
+
+.PHONY: sbom-tool
+sbom-tool:
+	@go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION)
 
 .PHONY: sbom
-sbom:
-	$(SBOM_ENV) go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
-		mod -json -noserial -licenses -output sbom.json .
+sbom: sbom-tool
+	$(SBOM_ENV) "$(SBOM_TOOL)" mod -json -noserial -licenses -output sbom.json .
 	@echo "wrote sbom.json"
 
 # sbom-verify regenerates the SBOM and fails if it differs from the committed
 # sbom.json (ignoring non-deterministic noise), so an unexplained dependency
 # change blocks CI (§20 supply chain).
 .PHONY: sbom-verify
-sbom-verify:
-	@$(SBOM_ENV) go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
-		mod -json -noserial -licenses -output sbom.new.json .
+sbom-verify: sbom-tool
+	@$(SBOM_ENV) "$(SBOM_TOOL)" mod -json -noserial -licenses -output sbom.new.json .
 	@# Ignore: the metadata timestamp (moves every run); metadata.tools[].hashes
-	@# (the CycloneDX-gomod BINARY's own MD5/SHA*, which `go run` rebuilds fresh
-	@# each time — never byte-identical across machines/toolchain patches, and not
-	@# part of our dependency graph); the main module's own git pseudo-version
+	@# (the CycloneDX-gomod BINARY's own MD5/SHA*, which differ per machine and
+	@# toolchain patch and are not part of our dependency graph); the main module's own git pseudo-version
 	@# (moves every commit; the pinned deps are all tagged releases, so any
 	@# 0.0.0-<date>-<hash> pseudo-version line is the main module). The point is to
 	@# catch DEPENDENCY drift, not these.

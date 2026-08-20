@@ -4,7 +4,7 @@
   "specVersion": "1.6",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-20T20:45:03+02:00",
+    "timestamp": "2026-08-20T22:08:41+02:00",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -339,6 +339,29 @@
           }
         ]
       }
+    },
+    {
+      "bom-ref": "pkg:golang/golang.org/x/term@v0.45.0?type=module",
+      "type": "library",
+      "name": "golang.org/x/term",
+      "version": "v0.45.0",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3705b2066a0909b7d31e9c6b5a867d0bafd5c4e7fb89cdb5f48f3165915dadfd"
+        }
+      ],
+      "purl": "pkg:golang/golang.org/x/term@v0.45.0?goarch=amd64\u0026goos=linux\u0026type=module",
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-Source-Code"
+            }
+          }
+        ]
+      }
     }
   ],
   "dependencies": [
@@ -349,7 +372,9 @@
         "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
         "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
         "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
-        "pkg:golang/golang.org/x/net@v0.58.0?type=module"
+        "pkg:golang/golang.org/x/net@v0.58.0?type=module",
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
+        "pkg:golang/golang.org/x/term@v0.45.0?type=module"
       ]
     },
     {
@@ -401,11 +426,18 @@
     {
       "ref": "pkg:golang/golang.org/x/net@v0.58.0?type=module",
       "dependsOn": [
-        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module",
+        "pkg:golang/golang.org/x/term@v0.45.0?type=module"
       ]
     },
     {
       "ref": "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+    },
+    {
+      "ref": "pkg:golang/golang.org/x/term@v0.45.0?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
     }
   ]
 }
