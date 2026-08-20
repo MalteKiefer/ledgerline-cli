@@ -17,12 +17,6 @@ ManifestDPIAware true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
-!include "StrFunc.nsh"
-
-; StrFunc requires each helper to be "declared" once outside a section, and the
-; uninstaller needs its own Un-prefixed copy.
-${StrStr}
-${UnStrRep}
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -44,6 +38,20 @@ InstallDirRegKey HKLM "Software\${APPNAME}" "InstallDir"
 ; failing halfway through a copy.
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
+
+; This is a 32-bit installer writing 64-bit machine state: without SetRegView 64
+; every HKLM\Software write is redirected into WOW6432Node, and the all-users
+; context is needed so the Start-menu group lands in ProgramData rather than in
+; whichever profile happened to approve the UAC prompt.
+Function .onInit
+  SetRegView 64
+  SetShellVarContext all
+FunctionEnd
+
+Function un.onInit
+  SetRegView 64
+  SetShellVarContext all
+FunctionEnd
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${APPNAME}"
@@ -104,20 +112,7 @@ Section "Start menu shortcuts" SecStartMenu
 SectionEnd
 
 Section "Add to PATH (all users)" SecPath
-  ; Append rather than replace, and only when not already present, so an
-  ; upgrade or a re-run cannot duplicate or clobber the machine PATH.
-  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
-  ${StrStr} $1 "$0" "$INSTDIR"
-  StrCmp $1 "" 0 pathDone
-    StrCpy $2 "$0"
-    StrCmp $2 "" 0 +2
-      StrCpy $2 "$INSTDIR"
-      Goto writePath
-    StrCpy $2 "$0;$INSTDIR"
-  writePath:
-    WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$2"
-    SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
-  pathDone:
+  Call AddInstDirToPath
 SectionEnd
 
 Section /o "Start the tray icon at sign-in" SecAutostart
@@ -154,10 +149,107 @@ Section "Uninstall"
   ; The install directory is removed from PATH, but the user's credential and
   ; config directory is deliberately left alone: uninstalling the program must
   ; not silently destroy a device pairing or a sync ledger.
-  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
-  ${UnStrRep} $1 "$0" ";$INSTDIR" ""
-  ${UnStrRep} $1 "$1" "$INSTDIR;" ""
-  ${UnStrRep} $1 "$1" "$INSTDIR" ""
-  WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$1"
-  SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  Call un.RemoveInstDirFromPath
 SectionEnd
+
+; --- PATH helpers -----------------------------------------------------------
+;
+; Deliberately built from core instructions (StrLen/StrCpy/IntOp) instead of
+; StrFunc: a mis-declared StrFunc macro expands to nothing, leaves the result
+; register holding whatever the previous section left there, and the caller
+; "successfully" skips the write. That is not a failure mode an installer should
+; have.
+!define ENV_HKLM 'HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"'
+
+; PathContains: $0 = haystack, $1 = needle -> $2 = "1" when present. Only the
+; installer needs it; the uninstaller rebuilds PATH entry-wise instead.
+!macro PathContainsBody UN
+Function ${UN}PathContains
+  Push $3
+  Push $4
+  Push $5
+  StrCpy $2 "0"
+  StrLen $3 "$1"
+  StrLen $4 "$0"
+  IntOp $4 $4 - $3
+  IntCmp $4 0 0 done 0   ; needle longer than haystack -> not present
+  StrCpy $5 0
+  loop:
+    StrCpy $6 "$0" $3 $5
+    StrCmp "$6" "$1" found
+    IntOp $5 $5 + 1
+    IntCmp $5 $4 loop loop done
+  found:
+    StrCpy $2 "1"
+  done:
+  Pop $5
+  Pop $4
+  Pop $3
+FunctionEnd
+!macroend
+!insertmacro PathContainsBody ""
+
+Function AddInstDirToPath
+  Push $0
+  Push $1
+  Push $2
+  ReadRegStr $0 ${ENV_HKLM} "Path"
+  StrCpy $1 "$INSTDIR"
+  Call PathContains
+  StrCmp $2 "1" done
+    StrCmp "$0" "" 0 +3
+      StrCpy $0 "$INSTDIR"
+      Goto write
+    StrCpy $0 "$0;$INSTDIR"
+  write:
+    WriteRegExpandStr ${ENV_HKLM} "Path" "$0"
+    ; Tell running shells to re-read the environment; without this a new
+    ; terminal still would not find the CLI until the next sign-in.
+    SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  done:
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; un.RemoveInstDirFromPath rebuilds PATH from its entries, dropping ours. Doing
+; it entry-wise rather than by string replacement cannot corrupt a neighbouring
+; directory whose name happens to contain ours.
+Function un.RemoveInstDirFromPath
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  ReadRegStr $0 ${ENV_HKLM} "Path"
+  StrCpy $1 ""      ; rebuilt PATH
+  StrCpy $2 ""      ; current entry
+  StrCpy $3 0       ; cursor
+  loop:
+    StrCpy $4 "$0" 1 $3
+    StrCmp "$4" "" flush
+    StrCmp "$4" ";" flush
+      StrCpy $2 "$2$4"
+      IntOp $3 $3 + 1
+      Goto loop
+  flush:
+    StrCmp "$2" "$INSTDIR" skip
+    StrCmp "$2" "" skip
+      StrCmp "$1" "" 0 +3
+        StrCpy $1 "$2"
+        Goto skip
+      StrCpy $1 "$1;$2"
+  skip:
+    StrCpy $2 ""
+    StrCmp "$4" "" written
+    IntOp $3 $3 + 1
+    Goto loop
+  written:
+  WriteRegExpandStr ${ENV_HKLM} "Path" "$1"
+  SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
