@@ -1,0 +1,24 @@
+# gitleaks configuration.
+#
+# The default rule set applies unchanged; this file only records the paths whose
+# high-entropy strings are provably NOT credentials. Every entry needs a reason,
+# and adding one is a review-worthy change: the whole point of the scan is that a
+# real bearer token in this repo's history would be the worst possible leak for a
+# client whose job is holding one.
+#
+# Patterns are ANCHORED (^…$) and escape their dots on purpose. An unanchored
+# path allowlist also matches look-alikes (a `.bak`, a `.jsx`, a nested copy),
+# which would silently stop scanning files nobody vetted.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published test vectors from the removed zero-knowledge stack (history only)"
+paths = [
+  # FIPS 203 (ML-KEM-768) known-answer-test vectors: a published KAT's
+  # `sharedSecret` is a fixed value from the specification, used to prove the
+  # CLI's KEM matched the web client byte for byte. It never protected anything.
+  # The file was deleted with the ZK stack in the 2026-08-11 plaintext rewrite
+  # and survives only in commit history, which gitleaks also scans.
+  '''^internal/conformance/testdata/store-v3/mlkem768-kat\.json$''',
+]
