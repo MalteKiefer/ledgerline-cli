@@ -136,8 +136,9 @@ jobs:
             dist/ledgerline-cli-*
             dist/ledgerline-cli_*
 
+      # cosign-installer publishes no moving major tag; pin the exact release.
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign checksums (keyless)
         working-directory: dist
