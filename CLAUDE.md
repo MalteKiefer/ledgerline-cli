@@ -10,8 +10,10 @@ placeholders.
 
 ## 1. Identity & scope
 
-`ledgerline-cli` is the command-line client of the **Ledgerline** self-hosted
-personal-cloud platform. As of 2026-08-11 the CLI is deliberately scoped to
+`ledgerline-cli` is the desktop client of the **Ledgerline** self-hosted
+personal-cloud platform: a command-line tool plus, since 2026-08-20, a Windows
+tray application (`cmd/ledgerline-gui`) that shares its session, pins and API
+client. The Windows installer ships both. As of 2026-08-11 the CLI is deliberately scoped to
 **two modules only: gallery and files** (plus the auth/status/audit plumbing they
 need). Everything else was removed.
 
@@ -115,6 +117,13 @@ the pivot). What the CLI still protects:
   lives in a temp file removed when the handle closes, and a delete through the
   mount trashes server-side rather than force-deleting, so a file manager's
   stray delete stays recoverable.
+- **Tray GUI:** shares the CLI's credential, pins and kill switch — it calls
+  `/me` on every refresh, clears the credential on a 401 and wipes on a pending
+  remote wipe, exactly as the CLI does. It launches two subprocesses, both as
+  argv arrays with no shell: the CLI next to its own executable (sign-in), and
+  rundll32 with the configured server URL, which is scheme-checked to http(s)
+  first so a tampered config cannot turn a menu click into a shell action. The
+  avatar it fetches is capped at 4 MiB.
 - **Audit trail:** local-only JSONL metadata (§7); never content or secrets.
 
 Host assumptions: the host may be multi-user; argv/env/shell-history/temp paths
@@ -124,6 +133,7 @@ compiled-in secrets.
 ## 4. Architecture & module map
 
 ```
+cmd/ledgerline-gui/     Windows tray app (systray wiring only; logic lives in internal/trayui)
 cmd/                    command tree: root, status, auth, audit, gallery, files (upload/ls/download/rm/
                         mkdir/sync + rename/mv/copy/folder/trash/versions/labels/search/stats/activity
                         + share/upload-link/shared/zip/archive/keys/encrypt/decrypt/webdav);
@@ -134,6 +144,10 @@ internal/api/           typed /api/v1 client: transport (client.go), auth, galle
 internal/gallery/       local helpers: media-file walking, upload naming
 internal/files/         local helpers: folder-tree render (tree.go) + two-way sync (sync.go) + watch service (watch.go)
 internal/webdavfs/      webdav.FileSystem over internal/api (the `files webdav` mount backend)
+internal/trayui/        tray menu model + avatar/brand icon rendering (platform-free, unit tested)
+internal/clientset/     one place that turns the stored session into a pinned, authenticated client
+packaging/nfpm.yaml     .deb / .rpm recipe
+packaging/windows/      NSIS installer (CLI + tray GUI, Start menu, PATH, autostart)
 internal/uploadledger/  per-server sha256 dedup ledger (skip re-uploading known bytes)
 internal/session/       durable credential (OS keychain + 0600 file fallback)
 internal/certpin/       TOFU certificate pinning
@@ -156,6 +170,10 @@ Direct:
 - `github.com/zalando/go-keyring` — OS keyring for the bearer token.
 - `github.com/fsnotify/fsnotify` — cross-platform recursive filesystem watch for
   `files sync --service` (no stdlib OS file-event API).
+- `fyne.io/systray` — the tray icon and menu. Pure Go on Windows (Win32 through
+  `golang.org/x/sys`), so the GUI keeps the CGO_ENABLED=0 static build the CLI
+  has. Writing the shell notification-area plumbing by hand would be several
+  hundred lines of Win32 for no gain.
 - `golang.org/x/net` — only for `golang.org/x/net/webdav`: the WebDAV
   handler/FileSystem contract behind `files webdav`. There is no stdlib WebDAV,
   and hand-rolling PROPFIND/LOCK XML would be a worse trade than one
@@ -229,6 +247,13 @@ files encrypt|decrypt             server-side public-key encrypt (file or --fold
 audit show|path|purge             local audit trail
 ```
 
+The desktop GUI (`ledgerline-gui`, Windows) is a tray icon, not a second
+command surface: it shows the version, the signed-in account (with its avatar),
+the server host and the storage usage, and offers Sign in / Sign out / Open web
+app / Refresh / Quit. Sign-in shells out to `ledgerline-cli auth login` in a
+console because pairing needs a one-time code the user pastes; everything else
+runs in-process against the same session and pinned client.
+
 Secret handling: every share/archive/upload-link password flag has a
 `--password-stdin` twin so the secret never reaches argv; a private-key
 passphrase has ONLY the stdin path (`--passphrase-stdin`), no flag at all,
@@ -267,6 +292,20 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   on the next poll rather than instantly. Wiring SSE would cut that latency —
   and would pin a server worker for the life of the connection, which is why the
   server caps concurrent streams.
+- The tray GUI is Windows-only. Linux (StatusNotifierItem, .desktop autostart,
+  a Start-menu entry in the .deb/.rpm) and macOS (Cocoa, which needs CGO and
+  therefore breaks the static build the release assumes) are separate slices;
+  `cmd/ledgerline-gui/main_other.go` is a stub that says so rather than
+  pretending.
+- The tray shows state and signs in/out. It does not yet expose sync, the
+  WebDAV mount, or notifications — those are the obvious next slices, and each
+  needs a decision about what a tray should do when a long operation fails.
+- The Windows installer is NSIS, chosen because it cross-builds on the Linux
+  release runner. Group Policy deployment would want an MSI (WiX on a Windows
+  runner); nothing depends on that today.
+- Neither the binaries nor the installer are Authenticode-signed, so Windows
+  SmartScreen warns on first run. Signing needs a certificate the project does
+  not have; the release is attested and checksum-signed with cosign instead.
 - CI-infra items inherited from before the pivot (SBOM/reproducible-build/signed
   commits) are org-policy, not in the repo tree.
 
@@ -282,6 +321,27 @@ a future desktop sync client), but nothing is CLI-less by design any more.
 
 ## 10. Changelog
 
+- 2026-08-20 feat: **Windows tray GUI + one installer for both programs.** New
+  `cmd/ledgerline-gui` (build-tagged windows; a stub elsewhere) draws a tray
+  icon whose menu shows the version, the signed-in account with its avatar, the
+  server host and the storage usage, plus Sign in / Sign out / Open web app /
+  Refresh / Quit. All the decidable behaviour lives in `internal/trayui` — the
+  menu model, the storage/host formatting, avatar→ICO conversion and the brand
+  icon, drawn in code rather than shipped as an asset — so it is unit tested
+  instead of eyeballed; the systray file is wiring only. `internal/clientset`
+  is the one place that turns a stored session into a pinned client, used by
+  both the CLI and the GUI. New `internal/api` `Avatar()`; `humanBytes` moved
+  to `internal/ui` so tray and terminal print the same string. One dependency,
+  `fyne.io/systray` (pure Go on Windows, keeps CGO_ENABLED=0). Packaging: an
+  NSIS installer (`packaging/windows/installer.nsi`) puts both executables in
+  Program Files with Start-menu shortcuts, an optional PATH entry, optional
+  autostart and an uninstaller that leaves the user's config alone; built by
+  `make installer-windows` on the Linux release runner. Two gosec findings in
+  the new code were fixed rather than suppressed (the ICO length conversion is
+  now bounded, and the server URL is scheme-checked before it reaches
+  rundll32). **Also fixed a real packaging bug found on the way:** `make
+  release` never appended `.exe` to the Windows binaries — an earlier patch had
+  silently not applied — so the released Windows artefacts were extensionless.
 - 2026-08-20 feat: **CLI parity for the whole Files surface + a mountable WebDAV
   endpoint + release packaging**. Every previously library-only Files capability
   now has a command (§7): `files share` (public links + internal viewer/editor

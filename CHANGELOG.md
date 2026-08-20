@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Windows tray application (`ledgerline-gui`).** A tray icon showing the
+  version, the signed-in account with its profile picture, the server and the
+  storage usage, with Sign in, Sign out, Open web app, Refresh and Quit in its
+  menu. It shares the CLI's credential, certificate pins and remote kill
+  switch, so both see the same session; signing in opens the CLI in a console,
+  because pairing needs a one-time code you paste.
+- **Windows installer.** One setup .exe per architecture installs both the CLI
+  and the tray application, creates Start-menu shortcuts, optionally adds the
+  install directory to PATH and optionally starts the tray at sign-in, and
+  registers a proper uninstaller. Uninstalling removes the programs but leaves
+  your credential and configuration alone.
+
 - **`files webdav` — mount the remote files as a network drive.** Serves the
   Files module over WebDAV on a local address (default `127.0.0.1:9800`) so the
   operating system can mount it: `net use` on Windows, `gio mount`/`davfs2` on
@@ -63,6 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Windows release binaries had no `.exe` extension.** `make release`
+  built every target with the same name pattern, so `ledgerline-cli-<version>-
+  windows-amd64` shipped without the suffix Windows needs to run it.
 - `TestConfigFileIsOwnerOnly` failed on Windows, where Go reports `0666` for
   every file because there are no POSIX mode bits; the credential file's
   confidentiality there comes from the per-user directory ACL and the primary

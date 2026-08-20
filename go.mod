@@ -10,6 +10,7 @@ go 1.25.0
 toolchain go1.26.6
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8

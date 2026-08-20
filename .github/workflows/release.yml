@@ -117,14 +117,20 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      # Cross-compiles Linux/macOS/Windows binaries (Windows as a plain .exe),
-      # then wraps the Linux ones into .deb and .rpm via the pinned nfpm.
-      - name: Cross-compile binaries and build Linux packages
-        run: make package
+      # NSIS builds the Windows setup .exe on the Linux runner, so the whole
+      # release comes out of one job with one toolchain.
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+
+      # Cross-compiles the CLI for every target plus the Windows tray GUI, then
+      # wraps the Linux binaries into .deb/.rpm and the Windows ones into a
+      # setup .exe that installs both programs.
+      - name: Cross-compile binaries and build packages
+        run: make package installer-windows
 
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum ledgerline-cli-* ledgerline-cli_* > checksums.txt
+        run: sha256sum ledgerline-cli-* ledgerline-cli_* ledgerline-gui-* > checksums.txt
 
       # Provenance is only meaningful for a published artefact, and the
       # attestation API rejects a non-tag ref, so a dry run skips it.
@@ -135,6 +141,7 @@ jobs:
           subject-path: |
             dist/ledgerline-cli-*
             dist/ledgerline-cli_*
+            dist/ledgerline-gui-*
 
       # cosign-installer publishes no moving major tag; pin the exact release.
       # The cosign binary itself is held on the 2.x line on purpose: cosign 3
@@ -183,5 +190,5 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md \
             --verify-tag \
-            dist/ledgerline-cli-* dist/ledgerline-cli_* dist/checksums.txt \
+            dist/ledgerline-cli-* dist/ledgerline-cli_* dist/ledgerline-gui-* dist/checksums.txt \
             dist/checksums.txt.sig dist/checksums.txt.pem

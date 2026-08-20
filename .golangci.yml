@@ -40,6 +40,16 @@ linters:
         text: "G304|G302|G306"
         linters:
           - gosec
+      # The tray launches two subprocesses with a computed argument: the CLI
+      # sitting next to its own executable (sign-in needs a console for the
+      # one-time code) and rundll32 with the configured server URL, which is
+      # scheme-validated first. Both are argv-array calls — no shell parses
+      # them — and both paths come from this program's own install directory or
+      # config, not from the server or the network.
+      - path: cmd/ledgerline-gui/main_windows\.go
+        text: "G204"
+        linters:
+          - gosec
       # Download/upload paths open a caller-supplied destination by design; the
       # path comes from the user's own command line, not from the server.
       - path: cmd/(files|gallery|files_shared|files_archive)\.go

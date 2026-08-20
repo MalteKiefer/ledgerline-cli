@@ -4,7 +4,7 @@
   "specVersion": "1.6",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-20T15:13:44+02:00",
+    "timestamp": "2026-08-20T20:22:22+02:00",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -68,6 +68,29 @@
     }
   },
   "components": [
+    {
+      "bom-ref": "pkg:golang/fyne.io/systray@v1.12.2?type=module",
+      "type": "library",
+      "name": "fyne.io/systray",
+      "version": "v1.12.2",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "63c0d9c602c7b1542deab63d66b92483e8faed2eefbffd45daf88e58a3e955e0"
+        }
+      ],
+      "purl": "pkg:golang/fyne.io/systray@v1.12.2?goarch=amd64\u0026goos=linux\u0026type=module",
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "Apache-2.0"
+            }
+          }
+        ]
+      }
+    },
     {
       "bom-ref": "pkg:golang/github.com/danieljoos/wincred@v1.2.3?type=module",
       "type": "library",
@@ -322,10 +345,18 @@
     {
       "ref": "pkg:golang/github.com/MalteKiefer/ledgerline-cli@v0.7.5-0.20260724084006-e762a166e688?type=module",
       "dependsOn": [
+        "pkg:golang/fyne.io/systray@v1.12.2?type=module",
         "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
         "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
         "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
         "pkg:golang/golang.org/x/net@v0.58.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/fyne.io/systray@v1.12.2?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/godbus/dbus/v5@v5.2.2?type=module",
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
       ]
     },
     {

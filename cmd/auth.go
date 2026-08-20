@@ -291,15 +291,4 @@ func backendLabel(b session.Backend) string {
 }
 
 // humanBytes formats a byte count with a binary unit suffix.
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
-}
+func humanBytes(n int64) string { return ui.HumanBytes(n) }

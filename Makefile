@@ -3,10 +3,12 @@
 # `make build`   — build a stamped binary for the host into ./bin
 # `make release` — cross-compile Linux, macOS and Windows binaries into ./dist
 # `make package` — build .deb and .rpm packages (amd64 + arm64) into ./dist
+# `make installer-windows` — build the Windows setup .exe into ./dist
 # `make test`    — run the test suite
 # `make check`   — vet + gofmt verification + tests (+ race)
 
 BINARY      := ledgerline-cli
+GUI_BINARY  := ledgerline-gui
 PKG         := github.com/MalteKiefer/ledgerline-cli/internal/version
 
 # Version derives from the current git tag; commit is always stamped. BUILD_DATE
@@ -40,6 +42,10 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 win
 # Arches that get a .deb and .rpm.
 PKG_ARCHES := amd64 arm64
 
+# The tray GUI ships for Windows first; the Linux and macOS trays are separate
+# work (StatusNotifierItem, Cocoa) and are not built here yet.
+GUI_PLATFORMS := windows/amd64 windows/arm64
+
 .PHONY: build
 build:
 	@mkdir -p bin
@@ -55,12 +61,28 @@ release:
 	@mkdir -p dist
 	@set -e; for platform in $(PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
-		out=dist/$(BINARY)-$(VERSION)-$$os-$$arch; \
+		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
+		out=dist/$(BINARY)-$(VERSION)-$$os-$$arch$$ext; \
 		echo "building $$out"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
 			go build -trimpath -ldflags "$(LDFLAGS)" -o $$out . ; \
 	done
+	@$(MAKE) --no-print-directory release-gui
 	@echo "release binaries in ./dist"
+
+# The tray GUI links with -H=windowsgui so starting it from the Start menu does
+# not flash a console window. Everything else matches the CLI build.
+.PHONY: release-gui
+release-gui:
+	@mkdir -p dist
+	@set -e; for platform in $(GUI_PLATFORMS); do \
+		os=$${platform%/*}; arch=$${platform#*/}; \
+		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
+		out=dist/$(GUI_BINARY)-$(VERSION)-$$os-$$arch$$ext; \
+		echo "building $$out"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -trimpath -ldflags "$(LDFLAGS) -H=windowsgui" -o $$out ./cmd/$(GUI_BINARY) ; \
+	done
 
 .PHONY: test
 test:
@@ -122,6 +144,24 @@ package: release completions
 	done
 	@rm -rf dist/pkg
 	@echo "packages in ./dist"
+
+# installer-windows wraps the Windows CLI + tray GUI into one setup .exe per
+# arch (Start-menu shortcuts, PATH entry, optional autostart, uninstaller).
+# makensis resolves File paths relative to the script's own directory and wants
+# backslash separators, hence the ..\..\dist form.
+.PHONY: installer-windows
+installer-windows: release
+	@command -v makensis >/dev/null || { echo "makensis not found (apt-get install nsis)"; exit 1; }
+	@set -e; for arch in $(PKG_ARCHES); do \
+		echo "building dist/$(BINARY)-setup-$(VERSION)-$$arch.exe"; \
+		makensis -V2 \
+			-DVERSION=$(PKG_VERSION) \
+			-DCLI_EXE=..\\..\\dist\\$(BINARY)-$(VERSION)-windows-$$arch.exe \
+			-DGUI_EXE=..\\..\\dist\\$(GUI_BINARY)-$(VERSION)-windows-$$arch.exe \
+			-DOUTFILE=..\\..\\dist\\$(BINARY)-setup-$(VERSION)-$$arch.exe \
+			packaging/windows/installer.nsi ; \
+	done
+	@echo "installers in ./dist"
 
 # SBOM_ENV pins the module graph the generator resolves to the CI platform, so a
 # regeneration from a Windows or macOS workstation produces the same committed

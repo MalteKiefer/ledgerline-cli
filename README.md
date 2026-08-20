@@ -4,8 +4,10 @@
 [![Release](https://github.com/MalteKiefer/ledgerline-cli/actions/workflows/release.yml/badge.svg)](https://github.com/MalteKiefer/ledgerline-cli/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A console client for a self-hosted [Ledgerline](https://github.com/MalteKiefer/Ledgerline)
-server, written in Go. It runs on **Linux**, **macOS** and **Windows**.
+A desktop client for a self-hosted [Ledgerline](https://github.com/MalteKiefer/Ledgerline)
+server, written in Go: a command-line tool for **Linux**, **macOS** and
+**Windows**, plus a **Windows tray application** that shows your account at a
+glance. Both share one credential and one set of certificate pins.
 
 The client covers two modules — **files** and **gallery** — plus the
 authentication, device and audit plumbing around them. Files is covered in full
@@ -22,6 +24,7 @@ public key — see [`files encrypt`](#encryption).
 ## Contents
 
 - [Install](#install)
+  - [Windows installer](#windows-installer)
   - [Linux packages (.deb / .rpm)](#linux-packages-deb--rpm)
   - [Binaries (Linux, macOS, Windows)](#binaries-linux-macos-windows)
   - [Verifying a release](#verifying-a-release)
@@ -34,6 +37,7 @@ public key — see [`files encrypt`](#encryption).
   - [`files` — browsing and transfer](#files--browsing-and-transfer)
   - [`files sync`](#files-sync)
   - [`files webdav` — mount as a network drive](#files-webdav--mount-as-a-network-drive)
+  - [Tray application (Windows)](#tray-application-windows)
   - [Organising: rename, move, trash, versions, labels](#organising-rename-move-trash-versions-labels)
   - [Sharing](#sharing)
   - [Archives](#archives)
@@ -47,11 +51,30 @@ public key — see [`files encrypt`](#encryption).
 
 ## Install
 
-Every release ships, for each supported target, a plain binary plus Debian and
-RPM packages for Linux; `checksums.txt` carries the SHA-256 of every artefact.
+Every release ships a plain binary per target, Debian and RPM packages for
+Linux, and a Windows setup .exe that installs the CLI together with the tray
+application. `checksums.txt` carries the SHA-256 of every artefact.
 
 Supported targets: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
 `windows/amd64`, `windows/arm64`.
+
+### Windows installer
+
+Download `ledgerline-cli-setup-<version>-amd64.exe` (or `-arm64`) from the
+releases page and run it. It installs both programs into
+`C:\Program Files\Ledgerline`:
+
+- **ledgerline-cli.exe** — the command-line client
+- **ledgerline-gui.exe** — the [tray application](#tray-application-windows)
+
+and creates Start-menu shortcuts. Two options are offered during setup: adding
+the install directory to `PATH` (on by default, so `ledgerline-cli` works in any
+terminal) and starting the tray icon when you sign in (off by default).
+Uninstalling removes the programs but leaves your credential and configuration
+untouched.
+
+The installer is not Authenticode-signed, so SmartScreen warns on first run —
+verify the download against `checksums.txt` as shown below.
 
 ### Linux packages (.deb / .rpm)
 
@@ -105,8 +128,10 @@ Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
 Select-String -Path checksums.txt -Pattern "windows-amd64.exe"
 ```
 
-The Windows build is a plain static executable: no installer, no CGO, no
-dependencies. The bearer token is stored in the Windows Credential Manager.
+The plain `.exe` is the CLI on its own — no CGO, no dependencies — for anyone
+who does not want the [installer](#windows-installer). The tray application
+ships as `ledgerline-gui-<version>-windows-amd64.exe` next to it. The bearer
+token is stored in the Windows Credential Manager.
 
 ### Verifying a release
 
@@ -142,9 +167,10 @@ older `go` command fetches it automatically on first build.
 ```sh
 git clone https://github.com/MalteKiefer/ledgerline-cli.git
 cd ledgerline-cli
-make build           # ./bin/ledgerline-cli, version-stamped from git
-make release         # cross-compile every target into ./dist
-make package         # .deb + .rpm (amd64, arm64) into ./dist
+make build             # ./bin/ledgerline-cli, version-stamped from git
+make release           # cross-compile every target (CLI + Windows tray) into ./dist
+make package           # .deb + .rpm (amd64, arm64) into ./dist
+make installer-windows # Windows setup .exe (needs makensis)
 ```
 
 The build embeds version, commit hash and build date via `-ldflags`, so the
@@ -282,6 +308,29 @@ net use Z: /delete
 A delete through the mount trashes the file or folder server-side; nothing is
 force-deleted, so a stray delete by a file manager stays recoverable in the
 trash.
+
+### Tray application (Windows)
+
+`ledgerline-gui.exe` sits in the notification area and answers the questions you
+would otherwise run three commands for. Its menu shows:
+
+- the client version
+- the signed-in account, with its profile picture as the item's icon
+- the server host
+- storage usage, e.g. `Storage: 1.5 GiB of 10.0 GiB (15%)`
+
+and offers **Sign in…**, **Sign out**, **Open web app**, **Refresh** and
+**Quit**. The icon is muted while you are signed out or the server cannot be
+reached; a failed refresh says so instead of showing stale numbers.
+
+It reads the same credential as the CLI, so signing in through either one signs
+in both, and it honours the same remote kill switch: a revoked device clears its
+credential on the next refresh. **Sign in…** opens `ledgerline-cli auth login`
+in a console window, because pairing needs the one-time code you copy from the
+web profile.
+
+The state refreshes every five minutes, on demand via **Refresh**, and right
+after a sign-in or sign-out.
 
 ### Organising: rename, move, trash, versions, labels
 
@@ -461,9 +510,12 @@ Layout:
 
 ```
 cmd/                    command tree: root, status, auth, devices, audit, gallery, files
+cmd/ledgerline-gui/     Windows tray application (systray wiring only)
 internal/api/           typed /api/v1 client; files split by feature area
 internal/files/         local helpers: tree render, two-way sync, watch service
 internal/webdavfs/      webdav.FileSystem over the Files API (the mount backend)
+internal/trayui/        tray menu model, avatar and brand icons (platform-free, tested)
+internal/clientset/     stored session -> pinned, authenticated API client
 internal/gallery/       media-file walking, upload naming
 internal/uploadledger/  per-server SHA-256 dedup ledger
 internal/session/       durable credential (OS keychain + 0600 file fallback)
@@ -471,6 +523,7 @@ internal/certpin/       TOFU certificate pinning
 internal/audit/         local JSONL operation audit trail
 internal/config/ ui/ version/
 packaging/nfpm.yaml     .deb / .rpm recipe
+packaging/windows/      NSIS installer for the CLI + tray GUI
 ```
 
 `internal/api` wraps the server's entire `Files` API surface, not only what the

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"strconv"
 )
 
@@ -121,6 +122,14 @@ func (c *Client) Me(ctx context.Context) (User, Usage, bool, error) {
 		return User{}, Usage{}, false, err
 	}
 	return resp.User, resp.Usage, resp.Wipe, nil
+}
+
+// Avatar streams the account's profile picture (PNG/JPEG bytes) to w. Only
+// meaningful when User.HasAvatar is true; a missing avatar is a 404, which the
+// caller can treat as "show initials instead". The image is non-secret display
+// data, like the display name. GET /avatar.
+func (c *Client) Avatar(ctx context.Context, w io.Writer) error {
+	return c.getStream(ctx, "/api/v1/avatar", w)
 }
 
 // Heartbeat reports this client's sync activity (state is "idle" or "syncing",

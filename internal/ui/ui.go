@@ -194,3 +194,19 @@ func (p *ProgressBar) Finish() {
 		p.last = 0
 	}
 }
+
+// HumanBytes renders a byte count with a binary unit ("1.4 GiB"), the form the
+// CLI prints for storage usage. It lives here so the tray GUI shows exactly the
+// same string as the terminal.
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
