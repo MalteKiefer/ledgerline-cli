@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-08-20T18:52:07.520Z",
+  "projectRoot": "C:\\Users\\MalteKiefer\\Entwicklung\\ledgerline-cli",
+  "instincts": {
+    "instincts": [],
+    "version": "1.0",
+    "lastUpdated": null
+  },
+  "gitBranch": "feat/files-cli-parity-webdav",
+  "lastFiles": [
+    ".github/workflows/release.yml",
+    ".golangci.yml",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "Makefile",
+    "README.md",
+    "cmd/auth.go",
+    "cmd/ledgerline-gui/main_other.go",
+    "cmd/ledgerline-gui/main_windows.go",
+    "go.mod",
+    "go.sum",
+    "internal/api/auth.go",
+    "internal/clientset/clientset.go",
+    "internal/loginui/loginui.go",
+    "internal/loginui/loginui_test.go",
+    "internal/loginui/page.go",
+    "internal/pairflow/pairflow.go",
+    "internal/pairflow/pairflow_test.go",
+    "internal/trayui/brand.go",
+    "internal/trayui/icon.go"
+  ]
+}
