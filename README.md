@@ -5,33 +5,40 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A console client for a self-hosted [Ledgerline](https://github.com/MalteKiefer/Ledgerline)
-server, written in Go. It runs on **Linux** and **macOS**.
+server, written in Go. It runs on **Linux**, **macOS** and **Windows**.
 
-The client is designed to grow into a full-featured tool. Today it covers secure
-authentication and end-to-end-encrypted gallery upload; more commands will follow.
+The client covers two modules — **files** and **gallery** — plus the
+authentication, device and audit plumbing around them. Files is covered in full
+(browse, sync, versions, trash, labels, search, sharing, archives, encryption and
+a mountable WebDAV endpoint); gallery is a deliberate minimum (upload, list,
+download, trash).
 
-Authentication is **zero-knowledge by design**: the stored credential proves your
-identity to the server and nothing more. It never unlocks your vault, and the CLI
-collects no telemetry.
+Content is stored **plaintext on the server**, which computes checksums,
+thumbnails, EXIF and video renditions itself. This client does no content
+encryption; what it protects is the transport (TLS 1.3 + certificate pinning) and
+your bearer token. The server can, on request, encrypt a stored file with a
+public key — see [`files encrypt`](#encryption).
 
 ## Contents
 
 - [Install](#install)
+  - [Linux packages (.deb / .rpm)](#linux-packages-deb--rpm)
+  - [Binaries (Linux, macOS, Windows)](#binaries-linux-macos-windows)
+  - [Verifying a release](#verifying-a-release)
 - [Build from source](#build-from-source)
 - [Configuration](#configuration)
 - [Usage](#usage)
   - [`status`](#status)
-  - [`auth login`](#auth-login)
-  - [`auth status`](#auth-status)
-  - [`auth logout`](#auth-logout)
-  - [`auth unlock` / `auth lock`](#auth-unlock--auth-lock)
-  - [`gallery upload`](#gallery-upload)
-    - [Parallel uploads and performance](#parallel-uploads-and-performance)
-    - [Local machine learning (`--ml-local`)](#local-machine-learning---ml-local)
-  - [`gallery download`](#gallery-download)
-  - [`files`](#files)
-  - [Settings](#settings)
-  - [`todo`](#todo)
+  - [`auth`](#auth)
+  - [`gallery`](#gallery)
+  - [`files` — browsing and transfer](#files--browsing-and-transfer)
+  - [`files sync`](#files-sync)
+  - [`files webdav` — mount as a network drive](#files-webdav--mount-as-a-network-drive)
+  - [Organising: rename, move, trash, versions, labels](#organising-rename-move-trash-versions-labels)
+  - [Sharing](#sharing)
+  - [Archives](#archives)
+  - [Encryption](#encryption)
+  - [`audit`](#audit)
 - [How authentication works](#how-authentication-works)
 - [Security notes](#security-notes)
 - [Development](#development)
@@ -40,13 +47,38 @@ collects no telemetry.
 
 ## Install
 
-Download the binary for your platform from the
-[releases page](https://github.com/MalteKiefer/ledgerline-cli/releases), make it
-executable, and place it on your `PATH`:
+Every release ships, for each supported target, a plain binary plus Debian and
+RPM packages for Linux; `checksums.txt` carries the SHA-256 of every artefact.
+
+Supported targets: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
+`windows/amd64`, `windows/arm64`.
+
+### Linux packages (.deb / .rpm)
+
+```sh
+VERSION=0.7.5
+base=https://github.com/MalteKiefer/ledgerline-cli/releases/download/v$VERSION
+
+# Debian / Ubuntu
+curl -LO "$base/ledgerline-cli_${VERSION}_amd64.deb"
+sudo apt install "./ledgerline-cli_${VERSION}_amd64.deb"
+
+# Fedora / RHEL / openSUSE
+curl -LO "$base/ledgerline-cli-${VERSION}.x86_64.rpm"
+sudo dnf install "./ledgerline-cli-${VERSION}.x86_64.rpm"
+```
+
+The packages install the binary to `/usr/bin/ledgerline-cli`, shell completions
+for bash/zsh/fish, and the licence and changelog under
+`/usr/share/doc/ledgerline-cli/`. A keyring (`libsecret`/gnome-keyring, kwallet)
+is *recommended*, not required: without one the client falls back to a `0600`
+credential file.
+
+### Binaries (Linux, macOS, Windows)
 
 ```sh
 # Example for macOS on Apple silicon; pick the version and asset for your system.
-VERSION=0.6.0
+VERSION=0.7.5
 ARCH=darwin-arm64
 base=https://github.com/MalteKiefer/ledgerline-cli/releases/download/v$VERSION
 curl -LO "$base/ledgerline-cli-$VERSION-$ARCH"
@@ -59,18 +91,28 @@ chmod +x "ledgerline-cli-$VERSION-$ARCH"
 sudo mv "ledgerline-cli-$VERSION-$ARCH" /usr/local/bin/ledgerline-cli
 ```
 
-Supported release targets: `linux/amd64`, `linux/arm64`, `darwin/amd64`,
-`darwin/arm64`. Every release ships a `checksums.txt` with the SHA-256 of each
-binary (use `sha256sum -c` on Linux). Releases are built and published from a
-version tag by the [release workflow](.github/workflows/release.yml), which
-runs the full test and vulnerability-scan suite first.
+On Windows, download `ledgerline-cli-<version>-windows-amd64.exe` (or
+`-arm64.exe`), verify it and put it somewhere on `%PATH%`:
 
-### Verifying the release signature (optional)
+```powershell
+$Version = "0.7.5"
+$base = "https://github.com/MalteKiefer/ledgerline-cli/releases/download/v$Version"
+Invoke-WebRequest "$base/ledgerline-cli-$Version-windows-amd64.exe" -OutFile ledgerline-cli.exe
+Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
+
+# Compare the hash against the checksums file before running it.
+(Get-FileHash ledgerline-cli.exe -Algorithm SHA256).Hash.ToLower()
+Select-String -Path checksums.txt -Pattern "windows-amd64.exe"
+```
+
+The Windows build is a plain static executable: no installer, no CGO, no
+dependencies. The bearer token is stored in the Windows Credential Manager.
+
+### Verifying a release
 
 `checksums.txt` is signed keyless with [cosign](https://docs.sigstore.dev/) via
-the release workflow's GitHub OIDC identity, and each binary carries a build
-provenance attestation. To verify the checksums were produced by this repo's
-release workflow (requires the `cosign` CLI):
+the release workflow's GitHub OIDC identity, and every artefact carries a build
+provenance attestation:
 
 ```sh
 curl -LO "$base/checksums.txt.sig"
@@ -81,11 +123,8 @@ cosign verify-blob checksums.txt \
   --certificate checksums.txt.pem \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/MalteKiefer/ledgerline-cli/\.github/workflows/release\.yml@'
-```
 
-You can also verify a binary's provenance with the GitHub CLI:
-
-```sh
+# Or verify one artefact's provenance with the GitHub CLI:
 gh attestation verify "ledgerline-cli-$VERSION-$ARCH" --repo MalteKiefer/ledgerline-cli
 ```
 
@@ -97,23 +136,20 @@ ledgerline-cli status
 
 ## Build from source
 
-Requires Go 1.25 or newer. The module pins the build toolchain to Go 1.26.5 (see
-`go.mod`); an older `go` command fetches it automatically on first build.
+Requires Go 1.25 or newer. The module pins the build toolchain (see `go.mod`); an
+older `go` command fetches it automatically on first build.
 
 ```sh
 git clone https://github.com/MalteKiefer/ledgerline-cli.git
 cd ledgerline-cli
-make build           # produces ./bin/ledgerline-cli, version-stamped from git
+make build           # ./bin/ledgerline-cli, version-stamped from git
+make release         # cross-compile every target into ./dist
+make package         # .deb + .rpm (amd64, arm64) into ./dist
 ```
 
-Cross-compile all supported targets into `./dist`:
-
-```sh
-make release
-```
-
-The build embeds version, commit hash, and build date via `-ldflags`, so the
-binary can report its own provenance (`ledgerline-cli status`).
+The build embeds version, commit hash and build date via `-ldflags`, so the
+binary reports its own provenance (`ledgerline-cli status`). `make repro-verify`
+proves the build is byte-reproducible from a given commit.
 
 ## Configuration
 
@@ -121,12 +157,12 @@ State lives in the per-user config directory:
 
 - Linux: `$XDG_CONFIG_HOME/ledgerline-cli` (default `~/.config/ledgerline-cli`)
 - macOS: `~/Library/Application Support/ledgerline-cli`
+- Windows: `%AppData%\ledgerline-cli`
 
-`config.json` (permissions `0600`) holds non-secret data: the server URL and your
-identity. The bearer token is stored separately in the OS keychain (see
-[Security notes](#security-notes)).
-
-Override the directory with `LEDGERLINE_CLI_CONFIG_DIR` if needed.
+`config.json` (`0600`) holds non-secret data: the server URL and your identity.
+The bearer token is stored separately in the OS credential store (see
+[Security notes](#security-notes)). Override the directory with
+`LEDGERLINE_CLI_CONFIG_DIR`.
 
 ## Usage
 
@@ -134,353 +170,223 @@ Every command has `--help`:
 
 ```sh
 ledgerline-cli --help
-ledgerline-cli auth --help
-ledgerline-cli gallery upload --help
+ledgerline-cli files --help
+ledgerline-cli files share --help
 ```
 
 ### `status`
 
-Print build metadata and check for a newer release:
+Prints the build metadata of the running binary and checks GitHub for a newer
+release.
 
-```console
-$ ledgerline-cli status
-Repository:  https://github.com/MalteKiefer/ledgerline-cli
-Version:     0.3.1
-Commit:      a1b2c3d
-Built:       2026-07-13T06:46:45Z
-Go:          go1.26.5
-Platform:    darwin/arm64
-Update:      up to date (latest v0.3.1)
-```
-
-The update check is a single unauthenticated request to GitHub and degrades
-gracefully when offline.
-
-### `auth login`
-
-Authenticate with a one-time code from the web app:
-
-1. In the Ledgerline web profile, open the **Command-line client** card and
-   generate a code. It is valid for **60 seconds**.
-2. Run `ledgerline-cli auth login` and paste the code when prompted.
-3. Back in the web app, **approve** the device that appears.
-4. The CLI stores the resulting token and confirms your identity.
-
-```console
-$ ledgerline-cli auth login
-Server URL: https://ledger.example.com
-One-time code (from the web profile): abc…
-Code accepted. Approve "ledgerline-cli@laptop" in the web app to continue.
-Logged in as Ada Lovelace <ada@example.com> on https://ledger.example.com.
-Token stored in the OS keychain.
-```
-
-Non-interactive use (for scripts):
+### `auth`
 
 ```sh
-ledgerline-cli auth login --server https://ledger.example.com --code "$CODE" \
-  --device-name "ci-runner"
+ledgerline-cli auth login --server https://ledger.example.com --code <one-time-code>
+ledgerline-cli auth status     # identity, storage usage, credential backend
+ledgerline-cli auth logout     # revoke server-side and clear local state
 ```
 
-Flags:
-
-| Flag | Description |
-| --- | --- |
-| `--server` | Server base URL (prompted if omitted). |
-| `--code` | One-time code (prompted if omitted). |
-| `--device-name` | Name shown for this device in the web app (default `ledgerline-cli@<hostname>`). |
-
-### `auth status`
-
-```console
-$ ledgerline-cli auth status
-Authenticated as Ada Lovelace <ada@example.com> (id 42)
-Server:  https://ledger.example.com
-Token:   stored in the OS keychain
-Usage:   1.2 GiB in files, 8.4 GiB in gallery
-```
-
-If the token was revoked or expired, this command says so and points you to
-`auth login`.
-
-### `auth logout`
-
-Revoke the token server-side and remove it locally:
-
-```console
-$ ledgerline-cli auth logout
-Logged out.
-```
-
-### `auth unlock` / `auth lock`
-
-Cache the vault key so `gallery`, `files` and `todo` don't prompt for the
-passphrase each time:
+Device management (the same list the web profile shows):
 
 ```sh
-ledgerline-cli auth unlock --remember 24h   # also: 12h, 7d, 4w
-ledgerline-cli auth lock                    # clear the cached key
+ledgerline-cli devices ls
+ledgerline-cli devices rm <id>
+ledgerline-cli devices wipe <id>
 ```
 
-The key is stored in the OS keychain (or a `0600` file, with a warning, when no
-keychain is available). Logout and a server-side device revoke clear it; any
-revoked/expired token wipes the local credential and cached key on the next call.
-
-### `gallery upload`
-
-Upload photos and videos to the gallery. Everything is **encrypted on your
-machine** before it leaves it — the server only ever sees ciphertext. Uploading
-requires your vault passphrase (prompted, never echoed), which unlocks the vault
-key locally; the passphrase and key never leave the machine.
-
-By default the upload sends **no plaintext to the server**: each photo is stored
-as a *partial record* (the encrypted original plus its basics, marked
-`thumbPending`), and a GUI client derives thumbnails, EXIF and search data later.
-Pass `--process` (or an ML flag) to opt into the server's transient-plaintext
-derivation step and store fully-processed records now.
-
-Folder mode:
+### `gallery`
 
 ```sh
-ledgerline-cli gallery upload -f /path/to/folder [-r]
+ledgerline-cli gallery upload <path...> [--jobs 4] [--batch 50] [--force]
+ledgerline-cli gallery list
+ledgerline-cli gallery download <id...> [--out DIR] [--variant original|edited]
+ledgerline-cli gallery rm <id...>          # trash (bulk when more than one)
 ```
 
-Google Photos (Takeout) mode:
+`gallery upload` walks directories, hashes each file (SHA-256) and skips bytes
+already sent — via a per-server ledger in the config directory. `--force`
+bypasses it, `--batch N` checkpoints the ledger every N uploads. Uploads show a
+progress bar on a TTY and plain per-line output when piped.
+
+### `files` — browsing and transfer
 
 ```sh
-ledgerline-cli gallery upload --google-photos -z /path/to/takeout.zip
+ledgerline-cli files ls                                  # whole tree + usage
+ledgerline-cli files upload <file...> [--folder ID] [--jobs 4] [--no-chunked]
+ledgerline-cli files download <id...> [--out DIR]
+ledgerline-cli files mkdir <name> [--parent ID]
+ledgerline-cli files rm <id...>                           # trash
+ledgerline-cli files search <query>                       # full-text / OCR
+ledgerline-cli files stats                                # usage by type, duplicates
+ledgerline-cli files activity [--file ID]
+```
+
+`files upload` skips a file whose bytes the server already has (its `sha256`), so
+a re-run is cheap and cross-host. Files over 64 MiB automatically go through the
+chunked-upload session, where a failed transfer only costs the current part;
+`--no-chunked` forces a single multipart body.
+
+### `files sync`
+
+```sh
+ledgerline-cli files sync <dir> [--direction both|up|down] [--conflict …]
+ledgerline-cli files sync <dir> --interval 5m         # poll
+ledgerline-cli files sync <dir> --service             # watch the filesystem
+```
+
+The sync compares content by SHA-256 (local, computed on the fly) against the
+server's `sha256`. It keeps **no last-seen state**, which means **deletions are
+never propagated**: a file missing on one side is treated as missing, never as a
+delete. That is a deliberate safety choice.
+
+### `files webdav` — mount as a network drive
+
+Serves the remote Files module over WebDAV on a local address so the operating
+system can mount it. Every operation is a REST call against your server; the only
+local state is the temp file of a body currently being read or written, removed
+when the handle closes.
+
+```sh
+ledgerline-cli files webdav                       # 127.0.0.1:9800, generated password
+ledgerline-cli files webdav --read-only           # refuse every write
+ledgerline-cli files webdav --addr 127.0.0.1:9999
+```
+
+The command prints the generated Basic-auth credentials and the mount command for
+your platform, then runs until interrupted:
+
+```sh
+# Linux
+gio mount http://127.0.0.1:9800/
+sudo mount -t davfs http://127.0.0.1:9800/ /mnt/ledgerline
+
+# macOS — Finder: Go > Connect to Server, or
+mount_webdav -i http://127.0.0.1:9800/ /Volumes/ledgerline
+```
+
+```powershell
+# Windows
+net use Z: http://127.0.0.1:9800 /user:ledgerline
+net use Z: /delete
 ```
 
 | Flag | Description |
 | --- | --- |
-| `-f`, `--folder` | Source folder to upload from. |
-| `-r`, `--recursive` | Include subfolders. |
-| `--google-photos` | Import from a Google Photos (Takeout) export. |
-| `-z`, `--zip` | Path to the Google Photos export `.zip`. |
-| `-j`, `--jobs` | Upload this many items in parallel (default 4). See [Parallel uploads](#parallel-uploads-and-performance). |
-| `--process` | Derive thumbnails/EXIF on the **server** (transient plaintext egress). Off by default — uploads write partial records and no plaintext leaves your machine. Implied by `--ml`/`--ml-local`. |
-| `--ml` | Run face detection + search embeddings on the **server** (needs the server's ML service; implies `--process`). Without it, a GUI client analyses photos later. |
-| `--ml-local` | Run that ML pass on a **local** immich-machine-learning instance at this URL instead of the server. See [Local machine learning](#local-machine-learning---ml-local). Mutually exclusive with `--ml`. |
-| `--ml-clip-model` | CLIP model name for `--ml-local` (default `ViT-B-32__openai`). Must match the server's Smart Search model. |
-| `--ml-face-model` | Face model name for `--ml-local` (default `buffalo_l`). Must match the server's Facial Recognition model. |
-| `--ml-min-score` | Minimum face-detection score for `--ml-local` (default `0.7`). |
-| `--batch` | Save progress (and, with `--delete`, remove verified files) after this many uploads (default 50). |
-| `-d`, `--delete` | Delete each local file **after** its upload is saved and the stored copy has been re-downloaded, decrypted and verified byte-for-byte. |
+| `--addr` | Address to serve on (default `127.0.0.1:9800`). |
+| `--read-only` | Refuse every write through the mount. |
+| `--user` | Basic-auth user name (default `ledgerline`). |
+| `--no-auth` | Serve without authentication. Loopback only, and it means every local user can read and write your files. |
+| `--allow-remote` | Required to bind a non-loopback address. |
 
-What it handles, matching the web app:
+A delete through the mount trashes the file or folder server-side; nothing is
+force-deleted, so a stray delete by a file manager stays recoverable in the
+trash.
 
-- **All common image and video formats** (JPEG/PNG/HEIC/HEIF/AVIF/TIFF/…, RAW,
-  and MOV/MP4/HEVC/…); unsupported files are reported and skipped, not fatal.
-- **Live / Motion photos from any vendor.** A same-named video beside a photo, an
-  Apple Live Photo split across two files (paired by its content id), and a
-  Google/Samsung Motion Photo with an embedded clip are all stored as one photo
-  with its motion clip.
-- **Thumbnails and metadata.** With `--process` (or an ML flag), thumbnail,
-  medium rendition, EXIF, location, perceptual hash (and, with `--ml`, face crops
-  + embeddings) are derived and sealed exactly as the web client stores them.
-  Without it, these are left `thumbPending` for a GUI client to backfill — no
-  plaintext leaves your machine.
-- **Duplicate skipping.** A byte-identical file already in the gallery is skipped
-  (matched by size + a hash of its head and tail).
-- **Resumable & safe.** Progress is saved periodically; `--delete` only removes a
-  local file once its encrypted copy is provably retrievable.
-
-> The gallery is zero-knowledge, so uploads are only reversible from the web app
-> (or by deleting the photo there). `--delete` removes local originals — keep a
-> backup until you have verified a batch.
-
-#### Parallel uploads and performance
-
-Each item is a short pipeline: encrypt + upload the original and (with
-`--process`) ask the server to derive thumbnails/EXIF (the transient-plaintext
-`process` step), then upload the derived blobs. Most of the wall-clock time is
-spent **waiting on the network and the server**, not on local CPU, so uploading
-several items at once is a large speed-up for big libraries. (Without
-`--process` there is no server round-trip per item beyond the blob upload.)
-
-`--jobs N` (default 4) uploads N items concurrently. Progress is still saved in
-batches of `--batch` (default 50): the client uploads a batch in parallel, then
-saves the manifest once at the batch boundary, so a save never races an in-flight
-upload. Increase `--jobs` if your link and server can take it (e.g. `-j 8` for
-an 18k-photo import); lower it on a small server or a metered connection.
+### Organising: rename, move, trash, versions, labels
 
 ```sh
-# Fast bulk import: 8 parallel uploads.
-ledgerline-cli gallery upload -f /photos -r -j 8
+ledgerline-cli files rename <id> <new-name>
+ledgerline-cli files mv <id...> --to <folder-id> | --root
+ledgerline-cli files copy <id> [--to <folder-id>]
+
+ledgerline-cli files folder rename|mv|rm|restore <id> …
+ledgerline-cli files trash ls|restore|rm|empty            # rm/empty are permanent
+
+ledgerline-cli files versions ls <file-id>
+ledgerline-cli files versions download <file-id> <version> [--out DIR]
+ledgerline-cli files versions restore <file-id> <version>
+
+ledgerline-cli files labels ls|create|rm
+ledgerline-cli files labels set <file-id> <label-id...>   # no ids clears the set
 ```
 
-Duplicate detection, `--delete` verification and Live Photo pairing all work
-unchanged under parallel upload.
+### Sharing
 
-#### Local machine learning (`--ml-local`)
-
-Face detection and CLIP search embeddings are the **most expensive part of an
-upload**. `--ml` runs them on the server's ML service, one photo at a time, which
-dominates the upload time. `--ml-local` moves that work to your own
-[immich-machine-learning](https://immich.app/) instance — a box you can put on a
-GPU and **tune** (models, thresholds) — so the server is only asked for the cheap
-derivations.
+Public links (a token in the URL, optionally password-gated and expiring):
 
 ```sh
-ledgerline-cli gallery upload -f /photos -r \
-  --ml-local http://localhost:3003 -j 8
+ledgerline-cli files share create <file-id> [--password-stdin] [--expires …] [--no-download]
+ledgerline-cli files share create --folder <id> [--expires …]
+ledgerline-cli files share ls
+ledgerline-cli files share update <id> [--remove-password] [--clear-expires] [--no-download]
+ledgerline-cli files share rm <id...>
 ```
 
-**How it works.** For each photo the client asks the server for the fast
-derivations only (thumbnail, medium rendition, EXIF, perceptual hash — no ML). It
-then sends the **medium JPEG rendition** to your local instance's `/predict`
-endpoint, reads back the CLIP embedding and the detected faces (bounding boxes +
-recognition embeddings), crops each face out of the rendition locally, and folds
-all of it into the photo's metadata — exactly the shape a server-ML upload would
-produce. The photo is stored fully analysed (not left for the web client's
-deferred pass). Everything that lands on the server is still **encrypted on your
-machine first**; the local ML instance only ever sees the rendition, on your own
-network.
-
-**Running an instance.** immich publishes a ready-made container:
+Internal shares, granting another Ledgerline account access:
 
 ```sh
-docker run -d --name immich-ml -p 3003:3003 \
-  -v immich-model-cache:/cache \
-  ghcr.io/immich-app/immich-machine-learning:release
-# GPU builds (-cuda, -openvino, …) exist and are what makes tuning worthwhile.
+ledgerline-cli files share folder add <email> --folder <id> --role viewer|editor
+ledgerline-cli files share folder ls
+ledgerline-cli files share folder role <share-id> <user-id> viewer|editor
+ledgerline-cli files share folder remove <share-id> <user-id>
+ledgerline-cli files share folder rm <share-id...>
 ```
 
-Point `--ml-local` at its base URL (here `http://localhost:3003`). The client
-speaks the immich-ml `/predict` protocol directly:
-
-```http
-POST {ml-local}/predict          (multipart/form-data)
-  entries = {
-    "clip": { "visual": { "modelName": "<--ml-clip-model>" } },
-    "facial-recognition": {
-      "detection":   { "modelName": "<--ml-face-model>",
-                       "options": { "minScore": <--ml-min-score> } },
-      "recognition": { "modelName": "<--ml-face-model>" }
-    }
-  }
-  image   = <the medium JPEG rendition>
-```
-
-**Tuning.** `--ml-clip-model`, `--ml-face-model` and `--ml-min-score` are passed
-straight through, so you can swap in a stronger recognition model, a different
-CLIP model, or a stricter/looser detection threshold and re-run. To analyse only
-one aspect, set the other model to an empty string (`--ml-face-model ""` does CLIP
-only, `--ml-clip-model ""` does faces only).
-
-> **Match the server's models.** Search results and face clusters are only
-> comparable when embeddings come from the same model space. Set
-> `--ml-clip-model` to the server's **Smart Search** model and `--ml-face-model`
-> to its **Facial Recognition** model (defaults `ViT-B-32__openai` and
-> `buffalo_l`). After your first `--ml-local` run, open one of those photos in the
-> web app and confirm the faces and search behave as expected before importing at
-> scale.
-
-> **Compatibility.** The immich-ml `/predict` API is not formally versioned; a
-> future immich-ml release could change it. If a run reports a local-ML error,
-> pin the container to the release these defaults were built against, or fall back
-> to `--ml` (server) or a plain upload (deferred web analysis).
-
-### `gallery download`
-
-Download and decrypt the gallery to a local folder (a plaintext export/backup).
-Requires the vault passphrase.
+Inbound upload links, letting an outsider drop files into one of your folders
+(both a destination folder and an expiry are required):
 
 ```sh
-ledgerline-cli gallery download -o /path/to/folder
+ledgerline-cli files upload-link create --folder <id> --expires 2026-12-31T23:59:59Z [--label …] [--password-stdin]
+ledgerline-cli files upload-link ls
+ledgerline-cli files upload-link rm <id...>
 ```
 
-| Flag | Description |
-| --- | --- |
-| `-o`, `--output` | Destination folder (required). |
-| `--from` | Only photos taken on or after this date (`YYYY-MM-DD`, inclusive). |
-| `--to` | Only photos taken on or before this date (`YYYY-MM-DD`, inclusive). |
-| `--images` | Only images. |
-| `--videos` | Only videos. Pass both, or neither, for everything. |
-| `--force` | Overwrite files that already exist in the target. |
-| `--edited` | Write the gallery's edited date and location into each file's metadata and export Live Photos as a still + `.mov` motion pair that re-pairs on import. Requires [`exiftool`](https://exiftool.org) on `PATH`; without it, originals are exported unchanged. |
-
-Each photo is written under its original filename (a short id is appended when
-two photos share a name), with its capture time set as the file's modification
-time. Files already present are skipped unless `--force` is given, so the command
-is resumable. Trashed photos are never downloaded.
-
-### `files`
-
-Work with the encrypted Files module. All commands need the vault passphrase.
+The receiving side of an internal share:
 
 ```sh
-ledgerline-cli files ls       [path] [-R]        # list folders/files (colour + icons)
-ledgerline-cli files download -o /local/dir [--remote SubFolder] [--force]
-ledgerline-cli files upload   -f /local/dir [--remote Target] [--hidden] [--batch N]
-ledgerline-cli files open     <path>             # open with the OS default app
-ledgerline-cli files rm       <path> [-r] [-f]   # trash, or --force to erase
-ledgerline-cli files sync     --map remote:local [--map …] [flags]
+ledgerline-cli files shared ls
+ledgerline-cli files shared browse <share-id>
+ledgerline-cli files shared download <share-id> <file-id...> [--out DIR]
+ledgerline-cli files shared upload <share-id> <file...>      # editor role
+ledgerline-cli files shared rename <share-id> <file-id> <name>
+ledgerline-cli files shared rm <share-id> <file-id...>
 ```
 
-`files rm` trashes by default (restore in the web app); `--force` deletes
-permanently and reclaims blobs, and a folder needs `--recursive`.
+Every password flag has a `--password-stdin` variant that reads the secret from a
+pipe, so it never appears in argv or your shell history.
 
-`files upload` uploads up to `--jobs` files in parallel (default 4; raise it for
-a big import over a fast link), shows a live progress bar, and saves progress
-every `--batch` uploads (default 50; `0` saves once at the end), so an
-interrupted run keeps what it already stored and a re-run skips it (same-size
-files are skipped).
-
-`files ls` shows a folder's contents colour-coded with a monochrome per-type icon
-(Nerd Font glyphs; use `--icons none` if your terminal font lacks them, and
-`--color never` to disable colour).
-
-**`files sync`** is a two-way sync. It keeps a local sync-state database (in the
-config dir) so it can tell which side changed since the last run.
-
-- **Mappings.** Repeatable `--map remote:local` maps a remote folder to a local
-  directory (e.g. `--map Photos:/home/me/photos --map Docs:/home/me/docs`). A
-  value with no colon maps the **whole store into one folder**
-  (`--map /home/me/ledger`). With no `--map`, the `sync` list from the settings
-  file is used.
-- **Deletions** — `--delete both` (default, propagate both ways) | `additive`
-  (never delete, recreate the missing side) | `to-remote` (local deletes trash
-  remote; remote never deletes local).
-- **Conflicts** (same file changed on both sides) — `--conflict keep-both`
-  (default; the remote copy is saved as `name (conflict …).ext` on both sides) |
-  `newest` | `skip`.
-- `--hidden` includes dotfiles; `--ignore PATTERN` (repeatable) and the settings
-  file's `ignore` list exclude paths (gitignore-style); `--dry-run` previews.
-
-> Two-way sync with deletion propagation can remove files. Start with
-> `--dry-run`, and consider `--delete additive` until you trust a mapping.
-
-### Settings
-
-`settings.json` in the config dir is user-editable and read by `files sync`:
-
-```json
-{
-  "hidden": false,
-  "ignore": ["*.tmp", "node_modules/", ".git/"],
-  "sync": [
-    { "remote": "Photos", "local": "/home/me/photos" },
-    { "remote": "", "local": "/home/me/ledger-all" }
-  ]
-}
-```
-
-### `todo`
-
-Manage encrypted todos and lists.
+### Archives
 
 ```sh
-ledgerline-cli todo ls [--list NAME] [--tag T] [--all|--done|--marked|--trash]
-ledgerline-cli todo add "Buy milk" --due 2026-07-20 --priority high --list Home
-ledgerline-cli todo done <id>        # also: undone, mark, unmark, restore
-ledgerline-cli todo edit <id> --title … --due … --list … --priority …
-ledgerline-cli todo rm <id> [--force]
-ledgerline-cli todo lists            # add <name> | rm <name> | rename <old> <new>
+# Stream a ZIP of a selection and/or a folder subtree to a local file.
+ledgerline-cli files zip <file-id...> [--folder <id>] --out bundle.zip
+
+# Build an archive server-side and store it as a normal file.
+ledgerline-cli files archive create <file-id...> [--folder <id>] \
+    --format zip|tar.gz|tar.xz|7z [--level 0-9] [--password-stdin] [--name …] [--into <folder-id>]
+
+# Extract a stored archive (a server-side worker job).
+ledgerline-cli files archive extract <file-id> [--password-stdin] [--into <folder-id>] [--here]
 ```
 
-Todos are referenced by the short id shown in `todo ls` (a unique prefix is
-enough). `--list` on `add`/`edit` creates the list if it does not exist.
+A password only applies to `zip` and `7z`; the tar family has no encryption.
+Extraction creates a folder named after the archive unless `--here` is given.
+
+### Encryption
+
+The server can encrypt a stored file (or a folder subtree, as one archive) to a
+public key — PGP or S/MIME — and decrypt it again. Keys and recipients are
+managed in the web app; the CLI reads the keyring to resolve ids:
+
+```sh
+ledgerline-cli files keys                                    # own keys + recipients
+ledgerline-cli files encrypt <file-id> --key <id> [--recipient <id>…]
+ledgerline-cli files encrypt --folder <id> --key <id>
+ledgerline-cli files decrypt <file-id> --key <id> [--passphrase-stdin]
+```
+
+Your own key is always among the recipients, so an encrypted file stays readable
+by you. A private-key passphrase has **no** command-line flag — it is read from
+stdin only.
+
+### `audit`
+
+```sh
+ledgerline-cli audit show [-n N] [--raw]
+ledgerline-cli audit path
+ledgerline-cli audit purge --yes
+```
 
 ## How authentication works
 
@@ -502,96 +408,81 @@ time from the web profile's device list, or with `auth logout`.
 ## Security notes
 
 - **Transport:** HTTPS is required for all remote servers, with **TLS 1.3** as the
-  floor. Plain HTTP is accepted only for loopback hosts (`localhost` and the
-  `127.0.0.0/8` / `::1` ranges) to ease local development.
+  floor. Plain HTTP is accepted only for loopback hosts (`localhost`,
+  `127.0.0.0/8`, `::1`) to ease local development. A redirect that would downgrade
+  the scheme or cross to another host is refused, so the bearer never follows a
+  request off-origin.
 - **Certificate pinning (TOFU):** the first time the CLI connects to an https
-  server it records that server certificate's public-key hash in `pins.json`
-  (in the config directory, `0600`). Later connections whose key differs are
-  refused — defence-in-depth against a mis-issued or swapped certificate on top
-  of normal CA validation. If your server certificate legitimately changes (for
-  example a new key on renewal), the error names the `pins.json` path; remove the
-  entry (or the file) to trust the new certificate. Loopback/http is not pinned.
-- **Token storage:** the bearer is stored in the OS keychain (macOS Keychain via
-  the Security framework; Linux Secret Service over D-Bus). When no keychain is
-  available — for example a headless server or an SSH session without a session
-  keyring — it falls back to a `0600` file in the config directory, and
-  `auth status` reports which backend is in use.
-- **Zero-knowledge:** the token authenticates API calls only. It does not derive,
-  hold, or transmit any vault key.
-- **Shard cache:** to speed up repeated or resumed runs on a large library, the
-  CLI caches encrypted record shards in `cache/` under the config directory
-  (`0600` files in a `0700` dir). It stores **only ciphertext** — the same bytes
-  the server holds, never plaintext — and is cleared by `auth logout`.
+  server it records that certificate's public-key hash in `pins.json` (config
+  directory, `0600`). Later connections whose key differs are refused — defence in
+  depth on top of normal CA validation. If your certificate legitimately changes,
+  the error names the `pins.json` path; remove the entry to trust the new key.
+- **Token storage:** the bearer lives in the OS credential store (macOS Keychain,
+  Windows Credential Manager, Linux Secret Service over D-Bus). Without one — a
+  headless server, an SSH session with no session keyring — it falls back to a
+  `0600` file in a `0700` directory, and `auth status` reports which backend is in
+  use. The token never appears in argv, the environment or any log.
+- **Remote kill switch:** every files/gallery command starts by calling `/me`. A
+  401 clears the local credential; a pending remote wipe erases all local state.
+- **Content is plaintext:** the server stores your bytes in the clear (this is the
+  platform's model). What the client guarantees is that they only travel over a
+  pinned TLS 1.3 connection. `files encrypt` is an explicit, server-side
+  public-key operation on top of that, not a client-side end-to-end scheme.
+- **Local WebDAV endpoint:** `files webdav` binds loopback and requires generated
+  Basic-auth credentials by default, because any local user can reach a local
+  socket. `--no-auth` is an explicit opt-out and is refused off loopback. Bodies
+  in flight live in temp files that are removed when the handle closes.
 - **Audit log:** every operation is recorded to a local, append-only JSON-lines
-  log (`audit.log` in the config directory, `0600`). Each line is one operation
-  with its command, outcome, duration and a timestamp — **metadata only, never
-  keys, tokens, passphrases, or content**. It is local; nothing is ever sent
-  anywhere. View it with `ledgerline-cli audit show` (or `--raw` for the JSON),
-  print its path with `audit path`, and delete it with `audit purge --yes`.
-- **Store v3 (post-quantum):** the gallery and files use a content-addressed,
-  id-bucketed sealed store with a crypto-suite tag on every manifest. Content at
-  rest is symmetric (XChaCha20-Poly1305 + Argon2id → already quantum-resistant);
-  cross-user sharing/identity key-wraps use a post-quantum **hybrid X25519 +
-  ML-KEM-768** exchange (FIPS 203), so a captured share stays confidential unless
-  *both* primitives fall. All sealed bytes are canonical JSON, byte-identical
-  across the web, iOS, Android and CLI clients (gated by shared conformance
-  fixtures). Requires a Store v3 server; there is no v1/v2 compatibility.
+  log (`audit.log`, `0600`, size-rotated): command, outcome, duration, timestamp
+  — **metadata only, never tokens or content**, and never sent anywhere. View with
+  `audit show`, locate with `audit path`, delete with `audit purge --yes`.
 - **No telemetry:** the CLI contacts only your configured server and (for
-  `status`) GitHub's public release API. It collects nothing about you.
+  `status`) GitHub's public release API.
 
 ## Development
 
 ```sh
-make test    # run the test suite
-make check   # vet + gofmt verification + tests
-make lint    # golangci-lint (also run in CI)
-make build   # host binary into ./bin
+make test          # unit tests
+make test-race     # race detector (the client is concurrent)
+make check         # vet + gofmt + tests + race
+make lint          # golangci-lint: staticcheck, errcheck, gosec, bodyclose, noctx…
+make tidy-verify   # go.mod tidiness + module checksum verification
+make sbom-verify   # CycloneDX SBOM drift check
+make repro-verify  # byte-reproducible build check
 ```
 
-The project layout keeps shared concerns reusable so new commands stay
-consistent:
+CI runs the suite and the race detector on Linux, macOS and Windows, plus four
+gates: lint, security (govulncheck + a gitleaks history scan), supply chain
+(tidiness, checksums, SBOM drift, reproducibility, dependency review) and a
+cross-compile of every release target. A version tag re-runs all of it before
+building and publishing.
+
+Layout:
 
 ```
-cmd/                  command tree (root, status, auth, gallery, files, todo)
-internal/api/         typed HTTP client for the /api/v1 surface
-internal/crypto/      libsodium-compatible crypto + PQ hybrid KEM (X25519+ML-KEM-768)
-internal/canonicaljson/ Store v3 canonical JSON (byte-identical across clients)
-internal/shard/       content-addressed, id-bucketed sharding (Store v3 §5.1)
-internal/conformance/ §17 cross-client conformance tests (fixtures + KATs)
-internal/vault/       passphrase → vault key unlock
-internal/manifeststore/ per-module sealed-row engine (conflict-safe save, DRY)
-internal/files/       Files module: sharded store, tree, listing, upload, download, sync
-internal/todo/        Todos module: todos and lists in the /store/todos row
-internal/gallery/     Store v3 sharded manifest, upload pipeline, Live Photo pairing
-internal/ml/          local immich-machine-learning client (--ml-local)
-internal/session/     durable credential storage (keychain + file fallback)
-internal/settings/    user-editable settings file (ignore list, sync mappings)
-internal/certpin/     trust-on-first-use certificate pinning
-internal/config/      config-directory resolution
-internal/version/     build metadata and update checks
-internal/ui/          prompts and spinner
+cmd/                    command tree: root, status, auth, devices, audit, gallery, files
+internal/api/           typed /api/v1 client; files split by feature area
+internal/files/         local helpers: tree render, two-way sync, watch service
+internal/webdavfs/      webdav.FileSystem over the Files API (the mount backend)
+internal/gallery/       media-file walking, upload naming
+internal/uploadledger/  per-server SHA-256 dedup ledger
+internal/session/       durable credential (OS keychain + 0600 file fallback)
+internal/certpin/       TOFU certificate pinning
+internal/audit/         local JSONL operation audit trail
+internal/config/ ui/ version/
+packaging/nfpm.yaml     .deb / .rpm recipe
 ```
 
-Under Store v3 each small module has its own sealed row at `/store/{module}`;
-`internal/manifeststore` decrypts one row, stages edits as operations, and
-re-seals with optimistic-concurrency retry — preserving unknown keys verbatim —
-so Todos is a thin wrapper. The Files and Gallery modules are large collections
-and use the sharded profile instead: a tiny sealed root pointing at
-content-addressed, id-bucketed record shards plus sibling collection blobs, so a
-save re-seals only the one bucket that changed.
-
-The crypto reproduces the web vault (`resources/js/vault.js`) and its shared
-helpers byte for byte — canonical JSON, the suite envelope, blob framing, `sig`,
-and the ML-KEM-768 hybrid KEM are all verified against the shared §17 conformance
-fixtures — so anything the CLI writes is readable in the web, iOS and Android
-clients and vice versa.
+`internal/api` wraps the server's entire `Files` API surface, not only what the
+CLI itself calls, so it can serve as the Go library for a future desktop sync
+client.
 
 ## Versioning
 
 This project follows [Semantic Versioning](https://semver.org/). Notable changes
-are recorded in [CHANGELOG.md](CHANGELOG.md). Releases are tagged `vMAJOR.MINOR.PATCH`
-and the running binary reports its version, commit, and build date via
-`ledgerline-cli status`.
+are recorded in [CHANGELOG.md](CHANGELOG.md). Releases are tagged
+`vMAJOR.MINOR.PATCH` and the running binary reports its version, commit and build
+date via `ledgerline-cli status`.
 
 ## License
 

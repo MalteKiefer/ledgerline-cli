@@ -69,6 +69,11 @@ public no-auth upload-link consumption endpoint (`/upload-link/{token}`, for
 external anonymous uploaders, not this account), `/invoices/ocr` (Finance
 module, unrelated).
 
+As of 2026-08-20 the whole wrapped Files surface also has a CLI command (§7) —
+the "library-only by design" split is gone — and `internal/webdavfs` turns that
+same surface into a `webdav.FileSystem`, so `files webdav` serves it as a local
+WebDAV endpoint the OS can mount.
+
 **Gallery** (`internal/api/gallery.go`) stays minimal — unchanged from the
 plaintext pivot:
 - `GET /gallery/data` → `{photos:[GalleryPhoto]}` (list, no bytes).
@@ -98,6 +103,18 @@ the pivot). What the CLI still protects:
 - **Remote kill switch:** every gallery/files command starts via `authedClient`,
   which calls `/me`; a 401 clears the local credential and a pending wipe erases
   all local state (`session.WipeLocal`).
+- **Secrets on argv:** a share/archive password may be passed as a flag for
+  convenience, but every such flag has a `--password-stdin` twin, and a
+  private-key passphrase has ONLY the stdin path — argv, the environment and
+  shell history are all readable by other users on a shared host.
+- **Local WebDAV endpoint (`files webdav`):** a local socket is reachable by
+  every user on the host, so the endpoint is bound to loopback and gated by
+  per-run, randomly generated Basic-auth credentials (printed once, never
+  stored). `--no-auth` is an explicit opt-out and is refused off loopback;
+  binding a non-loopback address requires `--allow-remote`. A body in flight
+  lives in a temp file removed when the handle closes, and a delete through the
+  mount trashes server-side rather than force-deleting, so a file manager's
+  stray delete stays recoverable.
 - **Audit trail:** local-only JSONL metadata (§7); never content or secrets.
 
 Host assumptions: the host may be multi-user; argv/env/shell-history/temp paths
@@ -108,12 +125,15 @@ compiled-in secrets.
 
 ```
 cmd/                    command tree: root, status, auth, audit, gallery, files (upload/ls/download/rm/
-                        mkdir/sync + rename/mv/copy/folder/trash/versions/labels/search/stats/activity)
+                        mkdir/sync + rename/mv/copy/folder/trash/versions/labels/search/stats/activity
+                        + share/upload-link/shared/zip/archive/keys/encrypt/decrypt/webdav);
+                        secret.go = stdin-first secret handling for passwords/passphrases
 internal/api/           typed /api/v1 client: transport (client.go), auth, gallery, multipart helper;
                         files split by feature — files.go (core CRUD) + files_folders/trash/versions/
                         labels/activity/chunked/shares/archive/crypto.go (full Files-tag surface, §2)
 internal/gallery/       local helpers: media-file walking, upload naming
 internal/files/         local helpers: folder-tree render (tree.go) + two-way sync (sync.go) + watch service (watch.go)
+internal/webdavfs/      webdav.FileSystem over internal/api (the `files webdav` mount backend)
 internal/uploadledger/  per-server sha256 dedup ledger (skip re-uploading known bytes)
 internal/session/       durable credential (OS keychain + 0600 file fallback)
 internal/certpin/       TOFU certificate pinning
@@ -136,6 +156,10 @@ Direct:
 - `github.com/zalando/go-keyring` — OS keyring for the bearer token.
 - `github.com/fsnotify/fsnotify` — cross-platform recursive filesystem watch for
   `files sync --service` (no stdlib OS file-event API).
+- `golang.org/x/net` — only for `golang.org/x/net/webdav`: the WebDAV
+  handler/FileSystem contract behind `files webdav`. There is no stdlib WebDAV,
+  and hand-rolling PROPFIND/LOCK XML would be a worse trade than one
+  Go-team-maintained module.
 
 The zero-knowledge crypto dependencies (`golang.org/x/crypto`, `golang.org/x/term`)
 were removed with the ZK stack; `go mod tidy` keeps the require blocks minimal.
@@ -156,6 +180,12 @@ Stdlib only for hashing (`crypto/sha256` for the sync content compare), transpor
 - **Sync state:** the sync compares by sha256 (local, computed on the fly) vs the
   server-reported `sha256`; no persisted last-seen state, so deletions are never
   propagated (a missing file is never treated as a delete — safe by default).
+- **WebDAV mount:** `files webdav` holds no local copy of the tree beyond a
+  5-second path->id snapshot of `GET /files/data` (invalidated on every mutation
+  it performs). A read downloads the body once into a temp file; a write buffers
+  into a temp file and uploads on handle close (the API has no partial-write
+  endpoint — a WebDAV PUT is one whole-body upload). Both temp files are removed
+  on close.
 - **Audit trail:** LOCAL-only JSONL at `<config>/audit.log` (0600, size-rotated).
   Operation METADATA only (`event,outcome,target,count,duration_ms,detail,pid`).
   Never a token or content. Managed with `audit show|path|purge`.
@@ -163,18 +193,21 @@ Stdlib only for hashing (`crypto/sha256` for the sync content compare), transpor
 ## 7. Command surface
 
 ```
-auth login|logout|status          device pairing → bearer; identity; revoke
+auth login|logout|status          device pairing -> bearer; identity; revoke
 status                            local build info + update check
 gallery upload <path...>          multipart upload (files/dirs, --jobs)
 gallery list                      photo/video list
 gallery download <id...>          originals (--out, --variant)
 gallery rm <id...>                trash (bulk when >1)
-files upload <file...>            multipart upload (--folder, --jobs)
+files upload <file...>            multipart upload; >64 MiB auto-switches to the
+                                  chunked session (--no-chunked forces one body)
 files ls                          folder/file tree + usage
 files download <id...>            raw bytes (--out)
 files rm <id...>                  trash a file
 files mkdir <name>                create folder (--parent)
 files sync <dir>                  two-way sync (--direction, --conflict, --interval, --service)
+files webdav                      serve the module as a local WebDAV drive to mount
+                                  (--addr, --read-only, --user, --no-auth, --allow-remote)
 files rename <id> <name>          rename a file
 files mv <id...>                  move files (--to <folder-id> | --root)
 files copy <id>                   duplicate a file (--to <folder-id>)
@@ -185,30 +218,55 @@ files labels ls|create|rm|set     coloured labels + per-file label set
 files search <query>              full-text/OCR search
 files stats                       usage by type + suspected duplicates
 files activity [--file <id>]      Files activity feed
+files share ls|create|update|rm   public token links (password/expiry/download gate)
+files share folder ls|add|role|remove|rm   internal viewer/editor shares to other accounts
+files upload-link ls|create|rm    inbound links for external uploaders (folder + expiry required)
+files shared ls|browse|download|upload|rename|rm   the receiving side of an internal share
+files zip [<id>...]               stream a ZIP of a selection/--folder to a local file
+files archive create|extract      server-side archive build (zip/tar.gz/tar.xz/7z) and extraction
+files keys                        keyring: own PGP/S-MIME keys + recipients
+files encrypt|decrypt             server-side public-key encrypt (file or --folder) / decrypt
 audit show|path|purge             local audit trail
 ```
 
-Deliberately CLI-less (available only as `internal/api` Go methods — sharing,
-encryption, archives, chunked upload and the rest of the Files-tag surface;
-see §2 for the full list). A future GTK desktop sync client is the intended
-consumer for those; add a CLI command for one only if a concrete CLI need
-shows up.
+Secret handling: every share/archive/upload-link password flag has a
+`--password-stdin` twin so the secret never reaches argv; a private-key
+passphrase has ONLY the stdin path (`--passphrase-stdin`), no flag at all,
+because it unlocks key material rather than gating a link (§3).
+
+The whole wrapped Files surface now has a CLI command. `internal/api` still
+carries more than the CLI strictly needs (it is also the intended Go library for
+a future desktop sync client), but nothing is CLI-less by design any more.
 
 ## 8. Open items  [LIVING]
 
 - The wider gallery API (albums, versions, favorites, trash management, shares,
   chunked upload, ML/faces/search) is intentionally not wrapped — gallery stays
-  a minimal capability floor. Files was widened in full (§2); do the same for
-  gallery, feature-file by feature-file, only when a concrete need arises.
+  a minimal capability floor. Files was widened in full (§2), CLI included (§7);
+  do the same for gallery, feature-file by feature-file, only when a concrete
+  need arises.
 - `files sync` propagates no deletions and keeps no last-seen state; that is a
   deliberate safety choice, not a bug. A stateful three-way sync (with delete
   propagation) would be a separate, carefully-reviewed feature.
-- The full `internal/api` Files surface (§2) has no CLI command for sharing,
-  encryption, archives or chunked upload by design (§7) — it exists for a
-  future GTK desktop sync client to import as a library. That GTK app itself
-  does not exist yet in this repo; `internal/files` (tree render + sync engine)
-  is local-CLI-only today and would need a GUI-facing layer (progress/conflict
-  callbacks instead of stdout/a progress bar) when that client is built.
+- `internal/files` (tree render + sync engine) and `internal/webdavfs` are both
+  CLI-facing today: the sync engine writes progress to stdout, and the WebDAV
+  filesystem has no progress/conflict callbacks. A GUI-facing layer would need
+  those hooks; the GTK client itself still does not exist in this repo.
+- `files webdav` serves plain HTTP on loopback because that is what the OS mount
+  clients speak (`net use`, `gio mount`, `mount_webdav`). It is bound to loopback
+  and Basic-auth-gated by default; a TLS-on-loopback variant (self-signed +
+  per-run trust) has not been built and would mostly fight the mount clients.
+- The server also exposes its own `/dav` WebDAV endpoint (sabre/dav) with a
+  separate app password. `files webdav` deliberately does NOT proxy that: it
+  serves the REST surface this client already speaks, so it works with the same
+  bearer, pinning and kill switch as every other command. If the server's `/dav`
+  ever gains capabilities the REST surface lacks, revisit.
+- The server's `/files/changes-stream` (SSE) is documented upstream as existing
+  for this client; nothing here consumes it. `files sync` polls (`--interval`) or
+  watches the local filesystem instead, so a mount/sync notices a remote change
+  on the next poll rather than instantly. Wiring SSE would cut that latency —
+  and would pin a server worker for the life of the connection, which is why the
+  server caps concurrent streams.
 - CI-infra items inherited from before the pivot (SBOM/reproducible-build/signed
   commits) are org-policy, not in the repo tree.
 
@@ -224,6 +282,34 @@ shows up.
 
 ## 10. Changelog
 
+- 2026-08-20 feat: **CLI parity for the whole Files surface + a mountable WebDAV
+  endpoint + release packaging**. Every previously library-only Files capability
+  now has a command (§7): `files share` (public links + internal viewer/editor
+  shares), `files upload-link`, `files shared` (receiving side), `files zip`,
+  `files archive create|extract`, `files keys|encrypt|decrypt`, and chunked
+  upload wired into `files upload` automatically above 64 MiB. New
+  `internal/webdavfs` implements `webdav.FileSystem` over `internal/api`, and
+  `files webdav` serves it on loopback with generated Basic-auth credentials so
+  the OS can mount the remote files as a network drive (`net use`, `gio mount`,
+  `mount_webdav`); one new dependency, `golang.org/x/net` (§5). New
+  `cmd/secret.go` gives every password flag a `--password-stdin` twin and makes
+  the private-key passphrase stdin-only (§3). **Packaging/CI:** release targets
+  gained `windows/amd64` and `windows/arm64` (plain `.exe`) and the Linux
+  binaries are now wrapped into `.deb`/`.rpm` via a pinned nfpm recipe
+  (`packaging/nfpm.yaml`, shell completions + docs included); CI runs build,
+  tests and the race detector across Linux/macOS/Windows and splits lint,
+  security (govulncheck + gitleaks history scan) and supply chain (tidiness,
+  module checksums, SBOM drift, reproducibility, dependency review) into their
+  own gates, which a release tag re-runs before publishing. golangci-lint gained
+  gosec/bodyclose/errorlint/noctx/unconvert/misspell (all findings fixed, not
+  suppressed, except documented path/permission exclusions), the SBOM generator
+  is pinned to `GOOS=linux` so a Windows regeneration matches CI, a
+  `.gitattributes` forces LF so a Windows commit cannot break the CI shell
+  scripts, and the Windows-only failure in `TestConfigFileIsOwnerOnly` (Go
+  reports 0666 there because Windows has no POSIX mode bits) is now handled
+  OS-aware instead of failing the suite. Also removed a stale
+  `internal/crypto/secretstream.go` lint exclusion left over from the ZK era.
+  Full suite green on Windows; every release target cross-compiles.
 - 2026-08-16 feat: **full Files-tag API surface + sync-core CLI**, as the Go
   library base for a future GTK desktop sync client. `internal/api` now wraps
   every `Files`-tagged openapi operation (v1.671.0; see §2), split across

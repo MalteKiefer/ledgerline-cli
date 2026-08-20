@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`files webdav` — mount the remote files as a network drive.** Serves the
+  Files module over WebDAV on a local address (default `127.0.0.1:9800`) so the
+  operating system can mount it: `net use` on Windows, `gio mount`/`davfs2` on
+  Linux, Finder/`mount_webdav` on macOS. Every operation is a REST call against
+  the server; the only local state is the temp file of a body in flight, removed
+  when the handle closes. The endpoint is bound to loopback and gated by
+  per-run generated Basic-auth credentials (printed once, never stored);
+  `--no-auth` is an explicit opt-out and is refused off loopback, and binding a
+  non-loopback address needs `--allow-remote`. `--read-only` refuses every
+  write, and a delete through the mount trashes server-side rather than
+  force-deleting.
+- **CLI commands for the whole Files API surface**, which until now existed only
+  as Go methods: `files share` (public token links, plus internal viewer/editor
+  shares to other accounts), `files upload-link` (inbound links for external
+  uploaders), `files shared` (the receiving side: browse, download, upload,
+  rename, delete), `files zip` (stream a ZIP to disk), `files archive
+  create|extract` (server-side zip/tar.gz/tar.xz/7z), and `files keys`,
+  `files encrypt`, `files decrypt` (server-side PGP/S-MIME public-key
+  encryption of a file or a folder subtree).
+- **Chunked upload for large files.** `files upload` switches to the
+  chunked-upload session above 64 MiB, so a failed transfer only costs the
+  current part; `--no-chunked` forces a single multipart body.
+- **Windows support in the release.** `windows/amd64` and `windows/arm64` ship as
+  plain static `.exe` files (no CGO, no installer); the bearer token uses the
+  Windows Credential Manager.
+- **Linux packages.** Every release now also ships `.deb` and `.rpm` for amd64
+  and arm64, built from the same checksummed binaries via a pinned nfpm recipe,
+  including bash/zsh/fish completions and the licence and changelog under
+  `/usr/share/doc/ledgerline-cli/`.
+- `--password-stdin` on every password flag (share links, upload links,
+  archives) so a secret never reaches argv or shell history. A private-key
+  passphrase has only the stdin path (`--passphrase-stdin`), no flag at all.
+
+### Changed
+
+- **CI is split into four gates** — tests (build, unit tests and the race
+  detector on Linux, macOS and Windows), lint, security (govulncheck plus a
+  gitleaks scan of the full history) and supply chain (go.mod tidiness, module
+  checksum verification, SBOM drift, reproducible build, dependency review on
+  pull requests). A release tag re-runs all of it, on all three platforms,
+  before anything is built or published.
+- golangci-lint now also runs gosec, bodyclose, errorlint, noctx, unconvert and
+  misspell; the findings were fixed rather than suppressed (download directories
+  are created `0750`, the WebDAV listener binds through a context-aware
+  `net.ListenConfig`, sentinel-error comparisons use `errors.Is`).
+- The SBOM generator is pinned to `GOOS=linux` so regenerating it from a Windows
+  or macOS workstation produces the file CI expects instead of one whose purls
+  carry that host's platform.
+- README rewritten: it still documented the pre-pivot zero-knowledge client
+  (vault passphrase, a `todo` module, `files open`, `--map` sync) which no longer
+  exists.
+
+### Fixed
+
+- `TestConfigFileIsOwnerOnly` failed on Windows, where Go reports `0666` for
+  every file because there are no POSIX mode bits; the credential file's
+  confidentiality there comes from the per-user directory ACL and the primary
+  store is the Credential Manager. The test is now OS-aware, so the suite is
+  green on Windows.
+- A `.gitattributes` forces LF for Go, YAML, JSON, Markdown, shell and the
+  Makefile, so a commit from a Windows checkout cannot introduce CRLF that
+  breaks the Linux CI scripts or `gofmt -l`.
+- Removed a lint exclusion for `internal/crypto/secretstream.go`, a file deleted
+  with the zero-knowledge stack.
+
 ## [0.7.4] - 2026-07-24
 
 ### Added
