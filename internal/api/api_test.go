@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -151,7 +152,8 @@ func TestValidationErrorExposesFields(t *testing.T) {
 
 	c := testClient(t, srv)
 	err := c.ClaimPair(context.Background(), "", "dev")
-	apiErr, ok := err.(*APIError)
+	var apiErr *APIError
+	ok := errors.As(err, &apiErr)
 	if !ok {
 		t.Fatalf("expected *APIError, got %T", err)
 	}
@@ -227,7 +229,7 @@ func TestGivesUpAfterMaxRetries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, _, _, err := c.Me(ctx)
-	if Status(err) != http.StatusTooManyRequests && err != context.DeadlineExceeded {
+	if Status(err) != http.StatusTooManyRequests && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected a 429 or deadline after exhausting retries, got %v", err)
 	}
 	if calls < 2 {

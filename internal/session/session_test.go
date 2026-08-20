@@ -1,8 +1,10 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -67,6 +69,18 @@ func TestConfigFileIsOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "windows" {
+		// Windows has no POSIX mode bits: the 0600 passed to os.WriteFile only
+		// maps to the read-only attribute and Stat reports 0666 regardless. The
+		// fallback file's confidentiality there comes from the NTFS ACL of the
+		// per-user config directory (under %LOCALAPPDATA%), and the primary
+		// credential store on Windows is wincred, not this file. So assert the
+		// file was written and stop — a mode assertion would be meaningless.
+		if !info.Mode().IsRegular() {
+			t.Fatalf("config is not a regular file: %v", info.Mode())
+		}
+		return
+	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("config perms = %o, want 600", perm)
 	}
@@ -74,7 +88,7 @@ func TestConfigFileIsOwnerOnly(t *testing.T) {
 
 func TestLoadWithoutSessionIsNotAuthenticated(t *testing.T) {
 	isolate(t)
-	if _, err := Load(); err != ErrNotAuthenticated {
+	if _, err := Load(); !errors.Is(err, ErrNotAuthenticated) {
 		t.Fatalf("Load on empty = %v, want ErrNotAuthenticated", err)
 	}
 }
@@ -90,7 +104,7 @@ func TestClearRemovesEverything(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, fileName)); !os.IsNotExist(err) {
 		t.Fatal("config file survived Clear")
 	}
-	if _, err := Load(); err != ErrNotAuthenticated {
+	if _, err := Load(); !errors.Is(err, ErrNotAuthenticated) {
 		t.Fatalf("Load after Clear = %v", err)
 	}
 	// Clearing again is a no-op, not an error.

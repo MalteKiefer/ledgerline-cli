@@ -1,7 +1,11 @@
 name: CI
 
-# Build, vet, format-check, test and vulnerability-scan on every push and pull
-# request. Release artefacts are produced separately by release.yml on a tag.
+# Every push and pull request runs four independent gates:
+#   test          — build + unit tests + race detector on Linux, macOS, Windows
+#   lint          — gofmt, go vet and golangci-lint (staticcheck, errcheck, gosec)
+#   security      — govulncheck (Go advisory DB) and a gitleaks secret scan
+#   supply-chain  — go.mod tidiness, module checksums, SBOM drift, reproducibility
+# Release artefacts (binaries, .deb/.rpm, .exe) are produced by release.yml on a tag.
 
 on:
   push:
@@ -12,9 +16,51 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-test:
-    name: Build & test
+  test:
+    # The client ships for Linux, macOS and Windows, so all three compile and run
+    # the suite here — a Windows-only path (keyring/wincred, no POSIX mode bits,
+    # backslash paths) must never be discovered by a user instead of by CI.
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build every package
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+      # The client is concurrent (parallel uploads, sync engine, watch service),
+      # so the race detector is a gate, not an optional extra. It needs a C
+      # toolchain, which the Linux and macOS images ship and the Windows one
+      # does not guarantee, so Windows runs the plain suite above only.
+      - name: Race detector
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+
+      - name: Cross-compile the release targets
+        if: matrix.os == 'ubuntu-latest'
+        run: make release
+
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -26,21 +72,80 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Verify (vet, gofmt, tests)
-        run: make check
+      - name: go vet
+        run: go vet ./...
 
-      - name: Lint
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (echo "gofmt needed on:" && gofmt -l . && exit 1)
+
+      # golangci-lint runs the standard set (errcheck, govet, ineffassign,
+      # staticcheck, unused) plus gosec and the hygiene linters configured in
+      # .golangci.yml.
+      - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
           version: latest
 
-      - name: Vulnerability scan
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+        with:
+          # gitleaks scans history, not just the tip commit.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Reports any dependency (and stdlib) advisory that is actually reachable
+      # from this code, which is why the Go toolchain is pinned in go.mod.
+      - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
+
+      # A leaked bearer token or key in a commit is the worst outcome for a
+      # client whose entire job is holding one, so history is scanned on every run.
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+        with:
+          # `git describe` needs tags to stamp the version the repro check builds.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: go.mod tidy + module checksums
+        run: make tidy-verify
 
       - name: SBOM up to date
         run: make sbom-verify
 
       - name: Reproducible build
         run: make repro-verify
+
+      # Flags a dependency bump that introduces a known-vulnerable or
+      # license-incompatible module before it can be merged.
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate

@@ -1,0 +1,21 @@
+# A commit made from a Windows checkout (core.autocrlf=true) must not introduce
+# CRLF into files the Linux CI runners execute or byte-compare: a Makefile
+# recipe, a shell script or a workflow with CRLF fails in ways that look like a
+# code problem, and a CRLF Go file breaks `gofmt -l`.
+* text=auto eol=lf
+
+*.go            text eol=lf
+*.mod           text eol=lf
+*.sum           text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+*.sh            text eol=lf
+Makefile        text eol=lf
+LICENSE         text eol=lf
+
+# Release artefacts and test fixtures that must stay byte-exact.
+*.exe           binary
+*.deb           binary
+*.rpm           binary

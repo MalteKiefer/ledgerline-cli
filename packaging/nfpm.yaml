@@ -1,0 +1,77 @@
+# nfpm recipe for the Linux distribution packages (.deb / .rpm).
+#
+# Driven entirely by environment variables so ONE recipe covers every
+# arch/format combination the Makefile and the release workflow build:
+#   PKG_VERSION  package version (git tag without the leading v, '-' → '.')
+#   PKG_ARCH     nfpm arch name: amd64 | arm64
+#
+# The binary itself is NOT referenced through an environment variable: nfpm
+# expands env vars in scalar fields like version/arch but not in a
+# contents[].src glob, which silently yields a 0-byte package. The Makefile
+# therefore stages the arch's binary at the fixed path below before each call.
+#
+# Build with: make package        (both arches, both formats, into ./dist)
+name: ledgerline-cli
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+# The Makefile normalises the git-describe string into a digits-and-dots form,
+# so no semver prerelease/metadata parsing is wanted here.
+version_schema: none
+section: utils
+priority: optional
+maintainer: Malte Kiefer <malte.kiefer@kiefer-networks.de>
+description: |
+  Command-line client for a self-hosted Ledgerline personal cloud.
+  Pairs with a Ledgerline server over TLS 1.3 with certificate pinning and
+  manages the gallery and files modules: upload, browse, download, share,
+  archive, encrypt and two-way sync.
+vendor: Malte Kiefer
+homepage: https://github.com/MalteKiefer/ledgerline-cli
+license: MIT
+
+contents:
+  - src: dist/pkg/ledgerline-cli
+    dst: /usr/bin/ledgerline-cli
+    file_info:
+      mode: 0755
+
+  # Shell completions are generated once from the host binary (their content is
+  # architecture-independent).
+  - src: dist/completions/ledgerline-cli.bash
+    dst: /usr/share/bash-completion/completions/ledgerline-cli
+    file_info:
+      mode: 0644
+  - src: dist/completions/ledgerline-cli.zsh
+    dst: /usr/share/zsh/site-functions/_ledgerline-cli
+    file_info:
+      mode: 0644
+  - src: dist/completions/ledgerline-cli.fish
+    dst: /usr/share/fish/vendor_completions.d/ledgerline-cli.fish
+    file_info:
+      mode: 0644
+
+  - src: LICENSE
+    dst: /usr/share/doc/ledgerline-cli/LICENSE
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/ledgerline-cli/README.md
+    file_info:
+      mode: 0644
+  - src: CHANGELOG.md
+    dst: /usr/share/doc/ledgerline-cli/CHANGELOG.md
+    file_info:
+      mode: 0644
+
+# The binary is a static CGO_ENABLED=0 build: no shared-library dependencies.
+# A keyring (libsecret/gnome-keyring, kwallet) is optional — without one the
+# client falls back to a 0600 credential file — so it is only recommended, and
+# the package name differs per distro family.
+overrides:
+  deb:
+    recommends:
+      - libsecret-1-0
+  rpm:
+    recommends:
+      - libsecret

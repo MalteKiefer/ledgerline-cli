@@ -1,9 +1,10 @@
 # ledgerline-cli build tooling.
 #
-# `make build`  — build a stamped binary for the host into ./bin
-# `make release` — cross-compile Linux and macOS binaries into ./dist
-# `make test`   — run the test suite
-# `make check`  — vet + gofmt verification + tests
+# `make build`   — build a stamped binary for the host into ./bin
+# `make release` — cross-compile Linux, macOS and Windows binaries into ./dist
+# `make package` — build .deb and .rpm packages (amd64 + arm64) into ./dist
+# `make test`    — run the test suite
+# `make check`   — vet + gofmt verification + tests (+ race)
 
 BINARY      := ledgerline-cli
 PKG         := github.com/MalteKiefer/ledgerline-cli/internal/version
@@ -20,13 +21,24 @@ BUILD_DATE  ?= $(shell TZ=UTC git show -s --date=format-local:'%Y-%m-%dT%H:%M:%S
 # diffed in CI so an unexplained dependency change blocks the merge.
 CYCLONEDX_VERSION := v1.10.0
 
+# Pinned Linux packager (nfpm) for the .deb/.rpm artefacts.
+NFPM_VERSION := v2.47.0
+
+# Package versions must be digits-and-dots for both dpkg and rpm; a dirty or
+# post-tag `git describe` string ("0.7.4-3-gabc1234-dirty") is normalised here.
+PKG_VERSION := $(subst -,.,$(VERSION))
+
 LDFLAGS := -s -w \
 	-X $(PKG).Version=$(VERSION) \
 	-X $(PKG).Commit=$(COMMIT) \
 	-X $(PKG).BuildDate=$(BUILD_DATE)
 
-# The verified, supported release targets.
-PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+# The verified, supported release targets. Windows ships as a plain .exe (no
+# CGO, no installer): the client is a single static binary everywhere.
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+
+# Arches that get a .deb and .rpm.
+PKG_ARCHES := amd64 arm64
 
 .PHONY: build
 build:
@@ -54,18 +66,72 @@ release:
 test:
 	go test ./...
 
+# The client is concurrent (parallel uploads, the sync engine, the watch
+# service), so the race detector is part of the gate, not an optional extra.
+.PHONY: test-race
+test-race:
+	go test -race ./...
+
 .PHONY: check
-check: test
+check: test test-race
 	go vet ./...
 	@test -z "$$(gofmt -l . )" || (echo "gofmt needed on:" && gofmt -l . && exit 1)
+
+# tidy-verify fails when go.mod/go.sum are not what `go mod tidy` would write,
+# so an undeclared or stale dependency cannot slip in; `go mod verify` then
+# checks every module in the cache against its go.sum checksum.
+.PHONY: tidy-verify
+tidy-verify:
+	@cp go.mod go.mod.bak; cp go.sum go.sum.bak
+	@go mod tidy
+	@if ! diff -q go.mod go.mod.bak >/dev/null || ! diff -q go.sum go.sum.bak >/dev/null; then \
+		diff -u go.mod.bak go.mod || true; diff -u go.sum.bak go.sum || true; \
+		mv go.mod.bak go.mod; mv go.sum.bak go.sum; \
+		echo "go.mod/go.sum not tidy: run 'go mod tidy' and commit"; exit 1; \
+	fi
+	@rm -f go.mod.bak go.sum.bak
+	@go mod verify
 
 .PHONY: lint
 lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
 
+# completions are generated once from a host build; their content does not
+# depend on the target architecture, so the same files ship in every package.
+.PHONY: completions
+completions: build
+	@mkdir -p dist/completions
+	./bin/$(BINARY) completion bash > dist/completions/$(BINARY).bash
+	./bin/$(BINARY) completion zsh  > dist/completions/$(BINARY).zsh
+	./bin/$(BINARY) completion fish > dist/completions/$(BINARY).fish
+	@echo "wrote dist/completions"
+
+# package builds a .deb and .rpm per arch from the release binaries, so the
+# published packages contain the exact bytes that were checksummed.
+.PHONY: package
+package: release completions
+	@mkdir -p dist/pkg
+	@set -e; for arch in $(PKG_ARCHES); do \
+		cp dist/$(BINARY)-$(VERSION)-linux-$$arch dist/pkg/$(BINARY); \
+		for format in deb rpm; do \
+			echo "packaging $$format/$$arch"; \
+			PKG_VERSION=$(PKG_VERSION) PKG_ARCH=$$arch \
+			go run github.com/goreleaser/nfpm/v2/cmd/nfpm@$(NFPM_VERSION) package \
+				--config packaging/nfpm.yaml --packager $$format --target dist/ ; \
+		done; \
+	done
+	@rm -rf dist/pkg
+	@echo "packages in ./dist"
+
+# SBOM_ENV pins the module graph the generator resolves to the CI platform, so a
+# regeneration from a Windows or macOS workstation produces the same committed
+# file instead of one whose purls all carry that host's goos/goarch — which
+# sbom-verify would then reject as drift.
+SBOM_ENV := GOOS=linux GOARCH=amd64
+
 .PHONY: sbom
 sbom:
-	go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
+	$(SBOM_ENV) go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
 		mod -json -noserial -licenses -output sbom.json .
 	@echo "wrote sbom.json"
 
@@ -74,7 +140,7 @@ sbom:
 # change blocks CI (§20 supply chain).
 .PHONY: sbom-verify
 sbom-verify:
-	@go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
+	@$(SBOM_ENV) go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION) \
 		mod -json -noserial -licenses -output sbom.new.json .
 	@# Ignore: the metadata timestamp (moves every run); metadata.tools[].hashes
 	@# (the CycloneDX-gomod BINARY's own MD5/SHA*, which `go run` rebuilds fresh

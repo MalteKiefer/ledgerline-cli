@@ -197,7 +197,7 @@ func newGalleryDownloadCommand() *cobra.Command {
 			if outDir == "" {
 				outDir = "."
 			}
-			if err := os.MkdirAll(outDir, 0o755); err != nil {
+			if err := os.MkdirAll(outDir, 0o750); err != nil {
 				return err
 			}
 			// Resolve names once so downloads land under their real file names.

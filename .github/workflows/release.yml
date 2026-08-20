@@ -1,21 +1,99 @@
 name: Release
 
-# On every version tag (vMAJOR.MINOR.PATCH) this workflow verifies the code,
-# cross-compiles the Linux and macOS binaries, generates SHA-256 checksums and
-# publishes a GitHub release with the CHANGELOG section as the notes.
+# On every version tag (vMAJOR.MINOR.PATCH) this workflow re-runs the full gate
+# (tests, race detector, lint, vulnerability scan, supply-chain checks), then
+# cross-compiles the Linux/macOS/Windows binaries, builds the .deb and .rpm
+# packages, checksums and signs everything and publishes a GitHub release with
+# the CHANGELOG section as the notes.
 
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
-# Least privilege by default; the job below elevates only what it needs.
+# Least privilege by default; the jobs below elevate only what they need.
 permissions:
   contents: read
 
 jobs:
+  verify:
+    # A tag must not be publishable if the code cannot pass the same gate a pull
+    # request has to pass — including on the non-Linux targets we ship.
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build every package
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Race detector
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+
+  gate:
+    name: Lint, security, supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (echo "gofmt needed on:" && gofmt -l . && exit 1)
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+      - name: go.mod tidy + module checksums
+        run: make tidy-verify
+
+      - name: SBOM up to date
+        run: make sbom-verify
+
+      - name: Reproducible build
+        run: make repro-verify
+
   release:
     name: Build and publish
+    needs: [verify, gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release and upload assets
@@ -34,20 +112,21 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Verify (vet, gofmt, tests)
-        run: make check
-
-      - name: Cross-compile release binaries
-        run: make release
+      # Cross-compiles Linux/macOS/Windows binaries (Windows as a plain .exe),
+      # then wraps the Linux ones into .deb and .rpm via the pinned nfpm.
+      - name: Cross-compile binaries and build Linux packages
+        run: make package
 
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum ledgerline-cli-* > checksums.txt
+        run: sha256sum ledgerline-cli-* ledgerline-cli_* > checksums.txt
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/ledgerline-cli-*
+          subject-path: |
+            dist/ledgerline-cli-*
+            dist/ledgerline-cli_*
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
@@ -82,5 +161,5 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md \
             --verify-tag \
-            dist/ledgerline-cli-* dist/checksums.txt \
+            dist/ledgerline-cli-* dist/ledgerline-cli_* dist/checksums.txt \
             dist/checksums.txt.sig dist/checksums.txt.pem

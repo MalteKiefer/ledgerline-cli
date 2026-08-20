@@ -346,7 +346,7 @@ func replaceRemote(ctx context.Context, c *api.Client, localDir, rel string, id 
 
 func pullTo(ctx context.Context, c *api.Client, localDir, rel string, id int64) error {
 	abs := filepath.Join(localDir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
 		return err
 	}
 	f, err := os.Create(abs)

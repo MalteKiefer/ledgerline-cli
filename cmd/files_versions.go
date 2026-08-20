@@ -75,7 +75,7 @@ func newFilesVersionsDownloadCommand() *cobra.Command {
 			if outDir == "" {
 				outDir = "."
 			}
-			if err := os.MkdirAll(outDir, 0o755); err != nil {
+			if err := os.MkdirAll(outDir, 0o750); err != nil {
 				return err
 			}
 			dest := filepath.Join(outDir, "v"+strconv.FormatInt(ids[1], 10)+"-"+strconv.FormatInt(ids[0], 10))

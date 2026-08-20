@@ -2,6 +2,22 @@ version: "2"
 
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    # A client whose whole job is holding a bearer token and writing files gets
+    # the security linter as a gate, not as an occasional audit.
+    - gosec
+    # Cheap correctness/hygiene linters that catch real classes of bug rather
+    # than style opinions.
+    - bodyclose # a leaked HTTP body is a leaked connection
+    - errorlint # %w / errors.Is instead of == on wrapped errors
+    - noctx # every outbound call must carry a context (cancellable, timeout-able)
+    - unconvert # redundant conversions
+    - misspell
+  settings:
+    gosec:
+      excludes:
+        # G104 duplicates errcheck, which already runs with the presets below.
+        - G104
   exclusions:
     presets:
       # Ignore the well-known safe unchecked errors (fmt.Fprint to stdout,
@@ -12,8 +28,42 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
-      # hash.Hash / poly1305.MAC Write never returns an error (documented in the
-      # file); the byte-exact secretstream absorbs into the MAC unconditionally.
-      - path: internal/crypto/secretstream\.go
+          - gosec
+      # The local WebDAV endpoint intentionally serves plain HTTP on loopback
+      # (the OS mount clients speak http://127.0.0.1), and the temp files that
+      # back a transfer are created by os.CreateTemp with default 0600 perms.
+      # Both are documented decisions, not oversights.
+      - path: cmd/files_webdav\.go
         linters:
-          - errcheck
+          - gosec
+      - path: internal/webdavfs/handles\.go
+        text: "G304|G302|G306"
+        linters:
+          - gosec
+      # Download/upload paths open a caller-supplied destination by design; the
+      # path comes from the user's own command line, not from the server.
+      - path: cmd/(files|gallery|files_shared|files_archive)\.go
+        text: "G304"
+        linters:
+          - gosec
+      # The credential file and the upload ledger live at paths this client
+      # derives itself (config.Dir + a fixed file name, or an explicit
+      # LEDGERLINE_CLI_CONFIG_DIR the user set); the server never influences
+      # them, so the "file inclusion via variable" and taint findings here are
+      # about our own config location, not untrusted input.
+      - path: internal/(session/session|uploadledger/ledger|config/config)\.go
+        text: "G304|G703"
+        linters:
+          - gosec
+      # The sync engine opens files under the local directory the user named on
+      # the command line; that is the whole point of a sync root. Same for the
+      # chunked uploader (a path the caller passed) and the audit-log reader (a
+      # path this client owns under its config dir).
+      - path: internal/files/sync\.go
+        text: "G304"
+        linters:
+          - gosec
+      - path: (internal/api/files_chunked|cmd/audit|cmd/files_versions)\.go
+        text: "G304"
+        linters:
+          - gosec
