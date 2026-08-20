@@ -82,7 +82,7 @@ jobs:
       # staticcheck, unused) plus gosec and the hygiene linters configured in
       # .golangci.yml.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
 
@@ -112,7 +112,7 @@ jobs:
       # A leaked bearer token or key in a commit is the worst outcome for a
       # client whose entire job is holding one, so history is scanned on every run.
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
           GITLEAKS_ENABLE_SUMMARY: "true"
@@ -146,6 +146,6 @@ jobs:
       # license-incompatible module before it can be merged.
       - name: Dependency review
         if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: moderate

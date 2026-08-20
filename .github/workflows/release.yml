@@ -10,6 +10,11 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  # Dry run: the whole pipeline can be exercised from a branch without
+  # publishing anything. Only the final "Create GitHub release" step is
+  # tag-gated, so a broken packaging or signing step is found here rather than
+  # halfway through a real release.
+  workflow_dispatch:
 
 # Least privilege by default; the jobs below elevate only what they need.
 permissions:
@@ -67,7 +72,7 @@ jobs:
         run: test -z "$(gofmt -l .)" || (echo "gofmt needed on:" && gofmt -l . && exit 1)
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
 
@@ -77,7 +82,7 @@ jobs:
           govulncheck ./...
 
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
           GITLEAKS_ENABLE_SUMMARY: "true"
@@ -121,7 +126,10 @@ jobs:
         working-directory: dist
         run: sha256sum ledgerline-cli-* ledgerline-cli_* > checksums.txt
 
+      # Provenance is only meaningful for a published artefact, and the
+      # attestation API rejects a non-tag ref, so a dry run skips it.
       - name: Attest build provenance
+        if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
@@ -129,7 +137,7 @@ jobs:
             dist/ledgerline-cli_*
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4
 
       - name: Sign checksums (keyless)
         working-directory: dist
@@ -139,6 +147,7 @@ jobs:
             --output-certificate checksums.txt.pem
 
       - name: Extract release notes from CHANGELOG
+        if: github.ref_type == 'tag'
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -152,7 +161,10 @@ jobs:
             printf 'Release %s\n' "$TAG" > release-notes.md
           fi
 
+      # Guarded so a workflow_dispatch dry run builds, checksums, attests and
+      # signs everything but publishes nothing.
       - name: Create GitHub release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
