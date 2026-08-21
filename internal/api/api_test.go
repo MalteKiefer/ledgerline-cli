@@ -112,7 +112,7 @@ func TestMeSendsBearerAndDecodes(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tok-xyz" {
 			t.Errorf("Authorization = %q", got)
 		}
-		w.Write([]byte(`{"user":{"id":1,"name":"Bob","email":"b@x.io"},"usage":{"files":2048,"gallery":4096}}`))
+		w.Write([]byte(`{"user":{"id":1,"name":"Bob","email":"b@x.io"},"usage":{"used":6144,"quota":8192,"files":2048,"gallery":4096}}`))
 	}))
 	defer srv.Close()
 
@@ -124,8 +124,39 @@ func TestMeSendsBearerAndDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Me: %v", err)
 	}
-	if user.Name != "Bob" || usage.Files != 2048 || usage.Gallery != 4096 {
+	if user.Name != "Bob" || usage.Used != 6144 || usage.Total() != 6144 {
 		t.Fatalf("unexpected: user=%+v usage=%+v", user, usage)
+	}
+	if usage.Files == nil || *usage.Files != 2048 || usage.Gallery == nil || *usage.Gallery != 4096 {
+		t.Fatalf("breakdown = %+v", usage)
+	}
+}
+
+// TestMeWithoutTheBreakdownIsNotReadAsZero is the shape the server actually
+// sends today: {used, quota} and nothing per module. Reading the absent fields
+// as zero is what made the tray report "Files: 0 B" for a full account.
+func TestMeWithoutTheBreakdownIsNotReadAsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"user":{"id":1},"usage":{"used":123456789,"quota":null}}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(srv.URL, WithToken("t"), WithHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, usage, _, err := c.Me(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Total() != 123456789 {
+		t.Fatalf("total = %d", usage.Total())
+	}
+	if usage.HasBreakdown() {
+		t.Fatalf("claimed a per-module breakdown it was never sent: %+v", usage)
+	}
+	if usage.Quota != nil {
+		t.Fatalf("quota = %v, want unlimited", *usage.Quota)
 	}
 }
 

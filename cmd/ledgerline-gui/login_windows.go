@@ -6,225 +6,79 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/authflow"
+	"github.com/MalteKiefer/ledgerline-cli/internal/deskui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/version"
-	"github.com/MalteKiefer/ledgerline-cli/internal/win32ui"
 )
 
-// Messages the worker goroutine posts back to the dialog. Everything that
-// touches a control has to happen on the UI thread, so results travel as
-// window messages rather than being written from the goroutine.
-const (
-	msgDone = win32ui.UserMessage + iota
-	msgFailed
-	msgTwoFactor
-	msgWaitingForApproval
-)
+// loginTimeout bounds the one-time-code exchange, which waits for the owner to
+// approve the device in the web app.
+const loginTimeout = 3 * time.Minute
 
-// loginTimeout bounds one attempt. Pairing waits for a human to approve the
-// device in the web app, so it is generous; a password attempt returns long
-// before this.
-const loginTimeout = 10 * time.Minute
-
-// loginDialog is the sign-in window: credentials with the account's second
-// factor, or the one-time code from the web profile. Which one is on screen is
-// the user's choice, because both are legitimate and neither is always
-// preferable: a password is fewer steps, a code never types the password into a
-// desktop program at all.
-type loginDialog struct {
-	win *win32ui.Window
-
-	server *win32ui.Control
-	device *win32ui.Control
-
-	emailLabel *win32ui.Control
-	email      *win32ui.Control
-	pwLabel    *win32ui.Control
-	password   *win32ui.Control
-	otpLabel   *win32ui.Control
-	otp        *win32ui.Control
-
-	codeLabel *win32ui.Control
-	code      *win32ui.Control
-
-	hint     *win32ui.Control
-	status   *win32ui.Control
-	submit   *win32ui.Control
-	switcher *win32ui.Control
-
-	pairing bool
-	busy    atomic.Bool
-
-	// result is the stored session on success; read after Run returns.
-	result  session.Session
-	success bool
-
-	// message carries the last error text for the caller to surface.
-	message string
-}
-
-// runLoginDialog shows the window and blocks until it closes. It returns the
-// stored session and true when the user signed in.
+// runLoginDialog shows the sign-in window and blocks until it closes. It returns
+// the stored session and true when the user signed in.
+//
+// Both ways in are offered because they suit different situations: e-mail,
+// password and a two-factor code needs nothing but the credentials, while the
+// one-time code from the web profile avoids typing a password into a window
+// that is not the browser. Which is safer depends on the user, so it is theirs
+// to choose.
 func runLoginDialog(defaultServer string) (session.Session, bool, string) {
-	win32ui.EnableDPIAwareness()
-
-	win, err := win32ui.NewWindow("Sign in to Ledgerline", 420, 330)
+	d := &loginDialog{}
+	err := deskui.Run(deskui.Options{
+		Title:  "Sign in to Ledgerline",
+		Width:  520,
+		Height: 560,
+		Body:   loginBody,
+		Script: loginScript,
+		Bindings: []deskui.Binding{
+			{Name: "defaults", Func: func() (map[string]string, error) {
+				return map[string]string{"server": defaultServer, "device": deviceName()}, nil
+			}},
+			{Name: "signIn", Func: d.signIn},
+			{Name: "pairCode", Func: d.pair},
+		},
+	})
 	if err != nil {
 		return session.Session{}, false, err.Error()
 	}
-	d := &loginDialog{win: win}
-	d.build(defaultServer)
-	win.Run()
 	return d.result, d.success, d.message
 }
 
-// build lays the controls out. Coordinates are 96-dpi pixels; the toolkit
-// scales them, so the dialog keeps its proportions on a scaled display.
-func (d *loginDialog) build(defaultServer string) {
-	const (
-		labelX = 16
-		fieldX = 130
-		fieldW = 274
-		rowH   = 24
-		gap    = 8
-	)
-	y := 16
-
-	d.win.Label("Server", labelX, y+4, 110, 20)
-	d.server = d.win.Edit(defaultServer, fieldX, y, fieldW, rowH, false)
-	y += rowH + gap
-
-	// Password fields and the pairing field occupy the same three rows; only
-	// one set is visible at a time.
-	credY := y
-	d.emailLabel = d.win.Label("E-mail", labelX, credY+4, 110, 20)
-	d.email = d.win.Edit("", fieldX, credY, fieldW, rowH, false)
-	d.pwLabel = d.win.Label("Password", labelX, credY+rowH+gap+4, 110, 20)
-	d.password = d.win.Edit("", fieldX, credY+rowH+gap, fieldW, rowH, true)
-	d.otpLabel = d.win.Label("Two-factor code", labelX, credY+2*(rowH+gap)+4, 110, 20)
-	d.otp = d.win.Edit("", fieldX, credY+2*(rowH+gap), fieldW, rowH, false)
-
-	d.codeLabel = d.win.Label("One-time code", labelX, credY+4, 110, 20)
-	d.code = d.win.Edit("", fieldX, credY, fieldW, rowH, false)
-
-	y = credY + 3*(rowH+gap)
-
-	d.win.Label("This device", labelX, y+4, 110, 20)
-	d.device = d.win.Edit(deviceName(), fieldX, y, fieldW, rowH, false)
-	y += rowH + gap + 4
-
-	d.hint = d.win.Label("", labelX, y, 388, 34)
-	y += 40
-
-	d.status = d.win.Label("", labelX, y, 388, 34)
-	y += 42
-
-	d.submit = d.win.Button("Sign in", 232, y, 84, 26, true, d.onSubmit)
-	d.win.Button("Cancel", 320, y, 84, 26, false, func() { d.win.Close() })
-	d.switcher = d.win.Button("Use a code", labelX, y, 120, 26, false, d.toggleMode)
-
-	d.win.OnMessage(msgDone, func(uintptr) {
-		d.success = true
-		d.setStatus("Signed in.")
-		// Leave the confirmation on screen briefly rather than yanking the
-		// window away the instant the request returns.
-		go func() {
-			time.Sleep(700 * time.Millisecond)
-			d.win.Close()
-		}()
-	})
-	d.win.OnMessage(msgFailed, func(uintptr) {
-		d.setBusy(false)
-		d.setStatus(d.message)
-	})
-	d.win.OnMessage(msgTwoFactor, func(uintptr) {
-		d.setBusy(false)
-		d.setStatus("This account needs its two-factor code. Enter it and sign in again.")
-		d.otp.Focus()
-	})
-	d.win.OnMessage(msgWaitingForApproval, func(uintptr) {
-		d.setStatus("Code accepted. Approve this device in the web app to finish.")
-	})
-
-	d.applyMode()
-	d.server.Focus()
+// loginDialog holds the outcome. The page drives the flow; this only records
+// what came back, so the tray can act on it once the window closes.
+type loginDialog struct {
+	mu      sync.Mutex
+	result  session.Session
+	success bool
+	message string
 }
 
-// toggleMode switches between password and one-time code.
-func (d *loginDialog) toggleMode() {
-	if d.busy.Load() {
-		return
-	}
-	d.pairing = !d.pairing
-	d.applyMode()
+// signInResult is what the page gets back. A failed attempt is a result, not an
+// error: distinguishing "wrong password" from "needs a second factor" is the
+// whole point, and an error string cannot carry that.
+type signInResult struct {
+	OK        bool   `json:"ok"`
+	NeedsCode bool   `json:"needsCode"`
+	Message   string `json:"message"`
 }
 
-// applyMode shows the fields the current method needs and explains it.
-func (d *loginDialog) applyMode() {
-	for _, c := range []*win32ui.Control{d.emailLabel, d.email, d.pwLabel, d.password, d.otpLabel, d.otp} {
-		c.SetVisible(!d.pairing)
-	}
-	d.codeLabel.SetVisible(d.pairing)
-	d.code.SetVisible(d.pairing)
-
-	if d.pairing {
-		d.switcher.SetText("Use a password")
-		d.hint.SetText("Generate a code in your web profile, paste it here, then approve\r\nthis device in the web app. Your password is never typed here.")
-		d.status.SetText("")
-		d.code.Focus()
-		return
-	}
-	d.switcher.SetText("Use a code")
-	d.hint.SetText("Sign in with your account credentials. Leave the two-factor field\r\nempty unless your account has one.")
-	d.status.SetText("")
-	d.email.Focus()
-}
-
-// onSubmit validates the visible fields and starts the attempt.
-func (d *loginDialog) onSubmit() {
-	if !d.busy.CompareAndSwap(false, true) {
-		return
-	}
-	server := strings.TrimSpace(d.server.Text())
-	device := strings.TrimSpace(d.device.Text())
-	if server == "" {
-		d.fail("Enter the server URL.")
-		return
-	}
-
-	if d.pairing {
-		code := strings.TrimSpace(d.code.Text())
-		if code == "" {
-			d.fail("Enter the one-time code from your web profile.")
-			return
-		}
-		d.setBusy(true)
-		d.setStatus("Submitting the code…")
-		go d.runPair(server, code, device)
-		return
-	}
-
-	email := strings.TrimSpace(d.email.Text())
-	password := d.password.Text()
+func (d *loginDialog) signIn(server, email, password, code, device string) (signInResult, error) {
+	server, email = strings.TrimSpace(server), strings.TrimSpace(email)
+	code, device = strings.TrimSpace(code), strings.TrimSpace(device)
 	switch {
+	case server == "":
+		return signInResult{Message: "Enter the server address."}, nil
 	case email == "":
-		d.fail("Enter your e-mail address.")
-		return
+		return signInResult{Message: "Enter your e-mail address."}, nil
 	case password == "":
-		d.fail("Enter your password.")
-		return
+		return signInResult{Message: "Enter your password."}, nil
 	}
-	d.setBusy(true)
-	d.setStatus("Signing in…")
-	go d.runPassword(server, email, password, strings.TrimSpace(d.otp.Text()), device)
-}
 
-// runPassword performs the credential sign-in off the UI thread.
-func (d *loginDialog) runPassword(server, email, password, otp, device string) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 
@@ -232,24 +86,29 @@ func (d *loginDialog) runPassword(server, email, password, otp, device string) {
 		Server:     server,
 		Email:      email,
 		Password:   password,
-		Code:       otp,
+		Code:       code,
 		DeviceName: device,
 		AppVersion: version.Version,
 	})
 	switch {
 	case errors.Is(err, authflow.ErrTwoFactorRequired):
-		d.win.Post(msgTwoFactor, 0)
+		return signInResult{NeedsCode: true, Message: "Enter the code from your authenticator app."}, nil
 	case err != nil:
-		d.message = err.Error()
-		d.win.Post(msgFailed, 0)
-	default:
-		d.result = sess
-		d.win.Post(msgDone, 0)
+		return signInResult{Message: err.Error()}, nil
 	}
+	d.finish(sess)
+	return signInResult{OK: true}, nil
 }
 
-// runPair performs the one-time-code exchange off the UI thread.
-func (d *loginDialog) runPair(server, code, device string) {
+func (d *loginDialog) pair(server, code, device string) (signInResult, error) {
+	server, code, device = strings.TrimSpace(server), strings.TrimSpace(code), strings.TrimSpace(device)
+	switch {
+	case server == "":
+		return signInResult{Message: "Enter the server address."}, nil
+	case code == "":
+		return signInResult{Message: "Enter the one-time code from your web profile."}, nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	defer cancel()
 
@@ -257,33 +116,108 @@ func (d *loginDialog) runPair(server, code, device string) {
 		Server:     server,
 		Code:       code,
 		DeviceName: device,
-		OnWaiting:  func() { d.win.Post(msgWaitingForApproval, 0) },
 	})
 	if err != nil {
-		d.message = err.Error()
-		d.win.Post(msgFailed, 0)
-		return
+		return signInResult{Message: err.Error()}, nil
 	}
-	d.result = sess
-	d.win.Post(msgDone, 0)
+	d.finish(sess)
+	return signInResult{OK: true}, nil
 }
 
-// fail reports a validation problem without having started anything.
-func (d *loginDialog) fail(text string) {
-	d.busy.Store(false)
-	d.setStatus(text)
+// finish records the session. The window closes itself from the page once the
+// promise resolves, which is also what stops the message loop.
+func (d *loginDialog) finish(s session.Session) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.result, d.success, d.message = s, true, ""
 }
 
-// setBusy disables input while a request is in flight, so a second Enter does
-// not start a competing attempt.
-func (d *loginDialog) setBusy(on bool) {
-	d.busy.Store(on)
-	for _, c := range []*win32ui.Control{d.server, d.device, d.email, d.password, d.otp, d.code, d.submit, d.switcher} {
-		c.SetEnabled(!on)
-	}
+const loginBody = `
+<div class="app">
+  <div class="body">
+    <div class="card">
+      <h1>Sign in</h1>
+      <p class="sub">Connect this computer to your Ledgerline server.</p>
+
+      <div class="row" style="margin-bottom:18px">
+        <button id="tab-pw" class="primary" onclick="mode('password')">E-mail and password</button>
+        <button id="tab-code" onclick="mode('code')">One-time code</button>
+      </div>
+
+      <label class="field"><span>Server</span>
+        <input id="server" type="text" placeholder="https://ledgerline.example" spellcheck="false"></label>
+
+      <div id="pane-pw">
+        <label class="field"><span>E-mail</span>
+          <input id="email" type="email" spellcheck="false"></label>
+        <label class="field"><span>Password</span>
+          <input id="password" type="password"></label>
+        <label class="field" id="otp-field" hidden><span>Two-factor code</span>
+          <input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" spellcheck="false"></label>
+      </div>
+
+      <div id="pane-code" hidden>
+        <label class="field"><span>One-time code</span>
+          <input id="code" type="text" spellcheck="false"></label>
+        <p class="sub">Create the code in the web app under Profile &rsaquo; Devices, then approve
+          this computer there.</p>
+      </div>
+
+      <label class="field"><span>Device name</span>
+        <input id="device" type="text" spellcheck="false"></label>
+
+      <p class="status" id="status"></p>
+    </div>
+  </div>
+  <div class="footer">
+    <button onclick="closeWindow()">Cancel</button>
+    <button id="submit" class="primary" onclick="submit()">Sign in</button>
+  </div>
+</div>`
+
+const loginScript = `
+const $ = id => document.getElementById(id);
+let pairing = false, busy = false;
+
+defaults().then(d => { $('server').value = d.server || ''; $('device').value = d.device || '';
+  ($('server').value ? $('email') : $('server')).focus(); });
+
+function mode(which) {
+  pairing = which === 'code';
+  $('pane-pw').hidden = pairing;
+  $('pane-code').hidden = !pairing;
+  $('tab-pw').className = pairing ? '' : 'primary';
+  $('tab-code').className = pairing ? 'primary' : '';
+  $('submit').textContent = pairing ? 'Submit code' : 'Sign in';
+  say('');
 }
 
-func (d *loginDialog) setStatus(text string) {
-	d.message = text
-	d.status.SetText(text)
+function say(text, kind) { const s = $('status'); s.textContent = text; s.className = 'status ' + (kind || ''); }
+
+function setBusy(on) {
+  busy = on;
+  document.querySelectorAll('input, button').forEach(el => { el.disabled = on; });
 }
+
+function submit() {
+  if (busy) return;
+  setBusy(true);
+  const server = $('server').value, device = $('device').value;
+  // The code exchange waits for the owner to approve the device, so it can sit
+  // for a while; saying so beats an unexplained pause.
+  say(pairing ? 'Waiting for approval in the web app…' : 'Signing in…');
+  const call = pairing
+    ? pairCode(server, $('code').value, device)
+    : signIn(server, $('email').value, $('password').value, $('otp').value, device);
+  call.then(r => {
+    if (r.ok) { say('Signed in.', 'ok'); closeWindow(); return; }
+    setBusy(false);
+    if (r.needsCode) { $('otp-field').hidden = false; $('otp').focus(); say(r.message); return; }
+    say(r.message, 'bad');
+  }).catch(e => { setBusy(false); say(String(e), 'bad'); });
+}
+
+addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !busy) submit();
+  if (e.key === 'Escape') closeWindow();
+});`

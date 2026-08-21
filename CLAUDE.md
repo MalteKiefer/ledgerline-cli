@@ -130,6 +130,13 @@ the pivot). What the CLI still protects:
 - **Sync configuration:** local paths and remote folder names in sync.json,
   0600. Not secret, but not other users' business either. It holds no
   credential; the runner uses the same stored session as every command.
+- **Application log:** the installer creates `logs` beside the programs and
+  grants the machine's users write access, because a log nobody can find is a
+  log nobody reads. That makes one directory inside Program Files writable by
+  any local user: the trade-off is deliberate and bounded — nothing is executed
+  or trusted from it, and the log records events and error messages, never a
+  token, a password or a two-factor code. A copy that cannot write there falls
+  back to the per-user configuration directory rather than logging nowhere.
 - **Tray GUI:** shares the CLI's credential, pins and kill switch — it calls
   `/me` on every refresh, clears the credential on a 401 and wipes on a pending
   remote wipe, exactly as the CLI does. It launches two subprocesses, both as
@@ -159,7 +166,10 @@ internal/files/         local helpers: folder-tree render (tree.go) + two-way sy
 internal/webdavfs/      webdav.FileSystem over internal/api (the `files webdav` mount backend)
 internal/trayui/        tray menu model + avatar/brand icon rendering (platform-free, unit tested)
 internal/authflow/      the two sign-in routes (password+2FA, one-time code), shared by every front end
-internal/win32ui/       hand-rolled Win32 toolkit: window, fields, buttons, list, folder picker, message loop
+internal/deskui/        the desktop windows: a WebView2 host plus the web app's own design tokens
+internal/win32ui/       the one native dialog left: the shell folder chooser
+internal/syncrunner/    the sync loop both front ends run: intervals + fsnotify change detection
+internal/applog/        the desktop client's rotating log file
 internal/syncconfig/    the configured folder pairs; one file, read and written by CLI and tray alike
 internal/installid/     stable per-installation id so a re-login replaces this machine's device entry
 internal/clientset/     one place that turns the stored session into a pinned, authenticated client
@@ -191,6 +201,11 @@ Direct:
   `golang.org/x/sys`), so the GUI keeps the CGO_ENABLED=0 static build the CLI
   has. Writing the shell notification-area plumbing by hand would be several
   hundred lines of Win32 for no gain.
+- `github.com/jchv/go-webview2` — hosts the settings and sign-in windows in the
+  Edge WebView2 control. Pure Go (the COM plumbing goes through `x/sys`), so the
+  CGO_ENABLED=0 static build survives. The alternative was the hand-rolled Win32
+  toolkit this replaced: it worked, but it could only ever look like a Win32
+  dialog, and this client's other face is a web app.
 - `golang.org/x/net` — only for `golang.org/x/net/webdav`: the WebDAV
   handler/FileSystem contract behind `files webdav`. There is no stdlib WebDAV,
   and hand-rolling PROPFIND/LOCK XML would be a worse trade than one
@@ -276,8 +291,8 @@ a second command surface. The menu shows the version, the signed-in account
 (files, gallery, total against the shared quota), and offers Sign in / Synced
 folders / Sign out / Open web app / Refresh / Quit.
 
-Sign-in is a native window (`cmd/ledgerline-gui/login_windows.go` over
-`internal/win32ui`) — no browser, no console — offering both routes and letting
+Sign-in is a window of its own (`cmd/ledgerline-gui/login_windows.go` over
+`internal/deskui`) — no browser, no console — offering both routes and letting
 the user choose: e-mail and password with the account's second factor, or the
 one-time code approved in the web app. Neither is universally better, which is
 why both are on screen: the password route is fewer steps, the code route never
@@ -290,10 +305,22 @@ never stores it. What the client now does handle, which it previously did not,
 is the password itself — held in memory for one request and never written
 anywhere.
 
-Synced folders is a list window over `internal/syncconfig`: add a folder with
-the shell picker, pause, resume, sync now, remove. The tray also runs due pairs
-in the background while it is open. Each window runs on its own OS thread with
-its own message loop, so neither can freeze the tray.
+Settings is one window with three tabs — Profile (identity, server, storage,
+sign-out), Synced folders (the `internal/syncconfig` list: add, edit, pause,
+sync now, remove) and About (build, paths, log folder). One window rather than
+one per topic, because a tray that scatters windows is a tray that loses them.
+Adding or editing a pair opens a form where **both** ends are chosen: the local
+directory from the shell picker, the remote folder from the server's own tree.
+Deriving the remote from the local folder's name was right by accident and
+silently wrong otherwise.
+
+Each window runs on its own OS thread with its own message loop, so neither can
+freeze the tray, and only one tray runs per user (a named mutex): two would mean
+two icons and two sync loops racing on one configuration file.
+
+The tray icon has three states — muted, idle, syncing — and the syncing one
+carries a dot rather than only a different hue, because 16 px of peripheral
+vision is a bad place to rely on colour.
 
 Secret handling: every share/archive/upload-link password flag has a
 `--password-stdin` twin so the secret never reaches argv; a private-key
@@ -320,16 +347,19 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   propagation) would be a separate, carefully-reviewed feature. The configured
   pairs (§7) inherit exactly that behaviour: removing a pair removes the
   arrangement, never a file.
-- The Win32 toolkit does not do themed controls. Visual styles need a
-  side-by-side manifest compiled into the executable, and the Go toolchain
-  cannot produce the resource object on its own; adding one means either a
-  committed binary blob or a resource generator in the build. Controls use the
-  correct system font and scale with DPI, but look classic. Worth revisiting if
-  the GUI grows past two windows.
-- The sync window can add, pause, run and remove a pair, but not edit its remote
-  folder, direction or conflict policy — those need `sync set`. A properties
-  dialog is the obvious next step; it was left out rather than shipped as a
-  half-built form.
+- The windows need the Edge WebView2 runtime. It ships with Windows 11 and with
+  any current Edge on Windows 10, so in practice it is there — but "in practice"
+  is not "always", and a machine without it gets an explanatory error rather
+  than a window. Bundling the evergreen installer would add ~150 MB to a 8 MB
+  program; the fixed-version distribution is the answer if that ever bites.
+- Windows only, still: the Linux tray (StatusNotifierItem) and the macOS one
+  (Cocoa) are separate work. `internal/syncrunner`, `internal/syncconfig` and
+  `internal/applog` are deliberately platform-free so that work is a front end,
+  not a rewrite.
+- The sync engine still keeps no last-seen state, so change detection means
+  "something changed here, reconcile the pair", not "this file changed, send
+  it". For a large tree that is a full comparison each time; it is correct and
+  bounded, but a stateful index is what would make it cheap.
 - `internal/files` (tree render + sync engine) and `internal/webdavfs` are both
   CLI-facing today: the sync engine writes progress to stdout, and the WebDAV
   filesystem has no progress/conflict callbacks. A GUI-facing layer would need
@@ -354,11 +384,10 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   therefore breaks the static build the release assumes) are separate slices;
   `cmd/ledgerline-gui/main_other.go` is a stub that says so rather than
   pretending.
-- The tray shows state and signs in/out (the sign-in dialog is a browser page;
-  a native window would mean either a hand-rolled Win32 dialog template or a
-  GUI toolkit that needs CGO and would break the static build). It does not yet
-  expose sync, the WebDAV mount, or notifications — those are the obvious next slices, and each
-  needs a decision about what a tray should do when a long operation fails.
+- The tray shows state, signs in and out, and opens the settings window. It does
+  not expose the WebDAV mount or notifications — those are the obvious next
+  slices, and each needs a decision about what a tray should do when a long
+  operation fails.
 - The Windows installer is NSIS, chosen because it cross-builds on the Linux
   release runner. Group Policy deployment would want an MSI (WiX on a Windows
   runner); nothing depends on that today.
@@ -379,6 +408,64 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   `docs/superpowers/plans/2026-08-11-plaintext-rewrite-gallery-files.md`.
 
 ## 10. Changelog
+
+- 2026-08-21 feat: **the desktop windows are WebView2 pages, not Win32 dialogs.**
+  The hand-rolled toolkit (`internal/win32ui`: window, fields, buttons, list,
+  tabs, owner-drawn accent button, DWM frame) is gone; what is left of it is the
+  shell folder chooser, which is the one dialog worth keeping native. Settings
+  and sign-in are now HTML rendered by the Edge WebView2 control through
+  `internal/deskui`, using the web app's own tokens — the same violet, the same
+  surfaces, the same radii, the same dark-mode flip.
+
+  This was not a paint job. A themed Win32 dialog still looks like a Win32
+  dialog: the sunken field wells, the flat grey, the 12 px caption font and the
+  outlined default button are what the platform draws, and the two rounds spent
+  approximating a modern stylesheet with `WM_CTLCOLOR*` and `WM_DRAWITEM` made
+  that plain. Rendering the markup directly costs one runtime dependency and
+  removes ~1 400 lines of syscall plumbing.
+
+  The page is sealed shut: no origin, no network, everything embedded, and a
+  content policy of `default-src 'none'` with `img-src data:`. The avatar
+  reaches it as a data URI the Go side fetched, sniffed and refused unless it
+  really was an image; every outward jump (Explorer, the browser) goes through a
+  binding that decides what a safe target is. What the page can do is exactly
+  the set of functions bound to it.
+
+  Two things moved out of the tray menu while the window existed to hold them:
+  the **avatar** and the **storage figures**, now a two-tone bar with the files
+  and gallery split beside it. A tray menu is read at a glance; four numbers
+  behind a hover were four numbers nobody read. The folder list lost its em
+  dashes with the rest of the widget — a dash between a path and its state reads
+  as a correction, not a label.
+
+- 2026-08-21 fix+feat: **the tray told the truth about storage, and grew a
+  settings window.** `/me` returns `{used, quota}`; the client read `files` and
+  `gallery`, which are not in that payload, so a 57 GiB account displayed
+  0 B — twice, once per module. `api.Usage` now reads `used` and treats the
+  per-module fields as optional (pointers, absent ≠ zero), and the tray shows
+  one `Storage:` line when the server does not break it down instead of
+  inventing two empty ones. The server side was fixed in the same pass:
+  `StorageUsage::snapshotForUser` now carries `files` and `gallery` alongside
+  `used`, from queries it was already running.
+
+  Around that: the menu is two rows with submenus instead of five stacked
+  figures, and says nothing at all before sign-in; the icon has a third state
+  with a dot for "syncing" and the sync row says what is running or what failed;
+  one tray per user (a named mutex — two were running, each with its own sync
+  loop); a rotating log in `logs` beside the programs, with **Open log folder**
+  in the menu; the mark from `internal/trayui` is now generated as a multi-size
+  .ico and stamped into both executables, the installer, the shortcuts and the
+  window title bars (which also brought the side-by-side manifest, so the
+  controls are themed and DPI-aware — the open item from the previous entry).
+
+  Sync grew the two things that make it usable: **fsnotify change detection**
+  (`internal/syncrunner`, shared by `sync service` and the tray: debounced,
+  per-pair, re-armed when the list changes) and a **form that asks for the
+  remote folder** instead of guessing it from the local folder's name, with the
+  interval in minutes and a watch toggle. Tests cover the runner's behaviour
+  without a server or a tray: a change fires a sync, a burst collapses into one,
+  a paused pair does not run, a signed-out client does nothing, and a change
+  outside every pair is ignored.
 
 - 2026-08-20 feat: **password sign-in, a native window, and configured folder
   pairs.** Sign-in no longer goes through a browser page: `internal/win32ui` is

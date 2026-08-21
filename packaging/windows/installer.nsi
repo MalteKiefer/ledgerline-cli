@@ -24,6 +24,9 @@ ManifestDPIAware true
 !ifndef OUTFILE
   !define OUTFILE "ledgerline-setup.exe"
 !endif
+!ifndef ICON
+  !define ICON "ledgerline.ico"
+!endif
 
 !define APPNAME "Ledgerline"
 !define PUBLISHER "Malte Kiefer"
@@ -31,6 +34,13 @@ ManifestDPIAware true
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 
 Name "${APPNAME} ${VERSION}"
+; One mark everywhere: the setup, the uninstaller, the wizard pages, the
+; shortcuts and the two executables all use the icon ./cmd/gen-icon draws from
+; the same code as the tray.
+Icon "${ICON}"
+UninstallIcon "${ICON}"
+!define MUI_ICON "${ICON}"
+!define MUI_UNICON "${ICON}"
 OutFile "${OUTFILE}"
 InstallDir "$PROGRAMFILES64\${APPNAME}"
 InstallDirRegKey HKLM "Software\${APPNAME}" "InstallDir"
@@ -87,6 +97,19 @@ Section "${APPNAME} (required)" SecCore
 
   ; Add/Remove Programs entry, including the size so Windows reports it
   ; honestly rather than as unknown.
+  ; The desktop client keeps its diary next to the programs, which is where
+  ; someone looks for it. Program Files is read-only for a normal account, so
+  ; the directory is created here and granted write access to the machine's
+  ; users; without that the tray would silently fall back to its per-user
+  ; configuration directory.
+  ;
+  ; The trade-off is deliberate and narrow: this one subdirectory is writable by
+  ; any local user, so on a shared machine another user could read the log or
+  ; fill it. Nothing is ever executed or trusted from it.
+  CreateDirectory "$INSTDIR\logs"
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR\logs" /grant *S-1-5-32-545:(OI)(CI)M'
+  Pop $0
+
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr   HKLM "${UNINSTKEY}" "DisplayName"     "${APPNAME}"
   WriteRegStr   HKLM "${UNINSTKEY}" "DisplayVersion"  "${VERSION}"
@@ -135,6 +158,9 @@ Section "Uninstall"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\uninstall.exe"
+  ; The logs are ours: created by this installer, written only by our programs.
+  Delete "$INSTDIR\logs\*.log"
+  RMDir "$INSTDIR\logs"
   RMDir "$INSTDIR"
 
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"

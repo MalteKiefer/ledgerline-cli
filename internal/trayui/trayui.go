@@ -23,22 +23,41 @@ type State struct {
 	UserName    string
 	UserEmail   string
 	Usage       api.Usage
-	AvatarPNG   []byte // empty when the account has none or the fetch failed
-	Err         error  // last refresh error, shown instead of stale numbers
-	Unreachable bool   // the server could not be reached (offline, DNS, TLS)
+	Err         error // last refresh error, shown instead of stale numbers
+	Unreachable bool  // the server could not be reached (offline, DNS, TLS)
+
+	Sync SyncState // what the folder sync is doing
 }
 
-// Model is the rendered menu: a title, a status block and the actions that make
-// sense right now. The systray wiring maps this onto menu items 1:1, so a
-// change in what the user sees is a change in this struct, not in UI plumbing.
+// Model is the rendered menu. The systray wiring maps it onto menu items 1:1,
+// so a change in what the user sees is a change here, not in UI plumbing.
+//
+// The shape is two summary rows, each with a submenu. A tray menu is read at a
+// glance while something else has the user's attention; five stacked figures at
+// the top level is a wall of text, and the details are one hover away.
 type Model struct {
-	Title       string // window/tooltip title, e.g. "Ledgerline 0.7.5"
-	Tooltip     string
-	Lines       []string // non-clickable status lines, top to bottom
+	Title   string // window/tooltip title, e.g. "Ledgerline 0.7.5"
+	Tooltip string
+
+	Account        string   // the row: who is signed in
+	AccountDetails []string // its submenu: e-mail, server, storage
+
+	SyncSummary string   // the row: what the folder sync is doing
+	SyncDetails []string // its submenu: one line per folder pair
+
+	Status string // a failure that replaces the figures, e.g. "Server unreachable"
+
+	ShowAccount bool
+	ShowSyncRow bool
+	ShowStatus  bool
 	ShowLogin   bool
 	ShowLogout  bool
 	ShowOpenWeb bool
-	Offline     bool // drives the muted tray icon
+	ShowSync    bool // the folder window needs a session to be useful
+	ShowRefresh bool
+
+	Offline bool // drives the muted tray icon
+	Busy    bool // a sync is running: the icon says so
 }
 
 // Build renders the menu model for a state. It never returns an error: a tray
@@ -49,8 +68,11 @@ func Build(s State) Model {
 		Tooltip: "Ledgerline " + displayVersion(s.Version),
 	}
 
+	// Signed out, the menu offers exactly one thing. Storage figures, the server
+	// row, "sync folders", "open web app" — none of them mean anything without a
+	// session, and a menu full of dead entries reads as broken rather than as
+	// waiting.
 	if !s.LoggedIn {
-		m.Lines = []string{"Not signed in"}
 		m.ShowLogin = true
 		m.Offline = true
 		m.Tooltip += " — not signed in"
@@ -58,25 +80,56 @@ func Build(s State) Model {
 	}
 
 	host := ServerHost(s.ServerURL)
+	name := nameLine(s.UserName, s.UserEmail)
+
 	m.ShowLogout = true
+	m.ShowSync = true
+	m.ShowRefresh = true
 	m.ShowOpenWeb = s.ServerURL != ""
+	m.ShowAccount = true
+	m.Account = name
+	m.Busy = s.Sync.Phase == SyncRunning
+
+	// The sync row is shown whenever signed in, including with no folders: "no
+	// folders" is the answer to "is anything syncing", and hiding the row makes
+	// the feature invisible to someone who has not found it yet.
+	m.ShowSyncRow = true
+	m.SyncSummary = s.Sync.SyncLine()
+	m.SyncDetails = s.Sync.SyncDetails()
 
 	// A failed refresh must not be dressed up as fresh data: say so, keep the
 	// identity we know, and drop the numbers we cannot vouch for.
 	if s.Err != nil {
 		m.Offline = true
-		status := "Server unreachable"
+		m.ShowStatus = true
+		m.Status = "Server unreachable"
 		if !s.Unreachable {
-			status = "Error: " + firstLine(s.Err.Error())
+			m.Status = "Error: " + firstLine(s.Err.Error())
 		}
-		m.Lines = []string{nameLine(s.UserName, s.UserEmail), host, status}
-		m.Tooltip += " — " + status
+		m.AccountDetails = detailRows(s.UserEmail, name, host)
+		m.Tooltip += " — " + m.Status
 		return m
 	}
 
-	m.Lines = append([]string{nameLine(s.UserName, s.UserEmail), host}, UsageLines(s.Usage)...)
-	m.Tooltip += " — " + nameLine(s.UserName, s.UserEmail) + " @ " + host
+	// Storage lives in the settings window, not here. A tray menu is read at a
+	// glance, and four figures behind a hover are four things nobody reads; the
+	// window can draw the same numbers as a bar with the split beside it.
+	m.AccountDetails = detailRows(s.UserEmail, name, host)
+	m.Tooltip += " — " + name + " @ " + host
+	if m.Busy {
+		m.Tooltip += " — syncing"
+	}
 	return m
+}
+
+// detailRows is the fixed head of the account submenu: the e-mail (when it adds
+// something the row does not already say) and the server.
+func detailRows(email, shown, host string) []string {
+	rows := make([]string, 0, 4)
+	if email != "" && email != shown {
+		rows = append(rows, email)
+	}
+	return append(rows, "Server: "+host)
 }
 
 // displayVersion normalises the build stamp for display; an unstamped dev build
@@ -116,21 +169,10 @@ func ServerHost(raw string) string {
 	return u.Host
 }
 
-// UsageLines breaks the storage figures out per module, because "how much are my
-// photos using" is the question a total cannot answer. Files and gallery share
-// one quota on the server, so the total is what the quota applies to.
-func UsageLines(u api.Usage) []string {
-	return []string{
-		"Files: " + ui.HumanBytes(u.Files),
-		"Gallery: " + ui.HumanBytes(u.Gallery),
-		"Total: " + StorageLine(u),
-	}
-}
-
 // StorageLine renders the combined usage as "1.4 GiB of 10.0 GiB (14%)", or
 // without the quota part when the account is unlimited.
 func StorageLine(u api.Usage) string {
-	used := u.Files + u.Gallery
+	used := u.Total()
 	if u.Quota == nil || *u.Quota <= 0 {
 		return ui.HumanBytes(used) + " used"
 	}

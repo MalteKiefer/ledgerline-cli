@@ -63,6 +63,23 @@ linters:
         text: "G304|G703"
         linters:
           - gosec
+      # The application log is meant to be read: it lives in a directory the
+      # installer creates beside the programs and grants the machine's users
+      # write access to, precisely so a person can open it without hunting
+      # through AppData. 0600 would defeat that, and the file holds no secret —
+      # events and error messages, never a token, password or code. The path is
+      # this program's own (its executable directory, or its config directory),
+      # not anything the server or the network supplies.
+      - path: internal/applog/applog\.go
+        text: "G301|G302|G304|G306"
+        linters:
+          - gosec
+      # gen-icon writes a build artefact (the .ico the resource compiler and the
+      # installer consume) to a path given on the command line.
+      - path: cmd/gen-icon/main\.go
+        text: "G301|G306"
+        linters:
+          - gosec
       # internal/win32ui is nothing but syscall marshalling: every window API
       # takes a pointer as a uintptr and sizes as int32, so unsafe.Pointer
       # conversions (G103) and the int/int32/uintptr traffic (G115) are the
@@ -70,6 +87,14 @@ linters:
       # constants and the system DPI, never from the network. Real error
       # handling in the package is still checked.
       - path: internal/win32ui/.*\.go
+        text: "G103|G115"
+        linters:
+          - gosec
+      # internal/deskui frames the WebView2 window: the DWM attribute calls and
+      # the icon lookup pass pointers as uintptr because that is the shape of
+      # the API. The values are this program's own constants and its own
+      # executable path, never anything received.
+      - path: internal/deskui/.*\.go
         text: "G103|G115"
         linters:
           - gosec

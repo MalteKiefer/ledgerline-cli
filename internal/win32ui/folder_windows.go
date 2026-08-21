@@ -1,3 +1,10 @@
+// Package win32ui is the last piece of native UI the desktop client keeps: the
+// shell's own folder chooser.
+//
+// The rest of the windows moved to WebView2 (see internal/deskui), because a
+// hand-drawn Win32 dialog can only ever look like one. A file dialog is the
+// exception — reimplementing the shell's tree, its network places and its "New
+// folder" button in a page would be worse in every way, and users know this one.
 package win32ui
 
 import (
@@ -13,7 +20,6 @@ var (
 	procSHBrowseForFolder   = shell32.NewProc("SHBrowseForFolderW")
 	procSHGetPathFromIDList = shell32.NewProc("SHGetPathFromIDListW")
 	procCoTaskMemFree       = ole32.NewProc("CoTaskMemFree")
-	procMessageBox          = user32.NewProc("MessageBoxW")
 )
 
 // browseInfo is BROWSEINFOW.
@@ -32,13 +38,6 @@ const (
 	bifReturnOnlyFileSystem = 0x0001
 	bifNewDialogStyle       = 0x0040
 	bifEditBox              = 0x0010
-
-	// MessageBox flags.
-	mbOKCancel     = 0x00000001
-	mbIconWarning  = 0x00000030
-	mbIconError    = 0x00000010
-	mbIconQuestion = 0x00000020
-	idOK           = 1
 )
 
 // PickFolder shows the shell folder chooser and returns the selected path, or
@@ -74,40 +73,4 @@ func PickFolder(owner windows.Handle, title string) string {
 		return "" // a virtual folder with no file-system path
 	}
 	return windows.UTF16ToString(buf)
-}
-
-// Confirm asks a yes/no question and reports whether the user agreed. Used for
-// the one destructive-looking action in the sync window (removing a pair),
-// even though it deletes no files.
-func Confirm(owner windows.Handle, title, text string) bool {
-	return messageBox(owner, title, text, mbOKCancel|mbIconQuestion) == idOK
-}
-
-// Warn shows a message the user cannot miss, for a failure that happened while
-// no window was in the foreground.
-func Warn(owner windows.Handle, title, text string) {
-	messageBox(owner, title, text, mbIconWarning)
-}
-
-// Error shows an error box.
-func Error(owner windows.Handle, title, text string) {
-	messageBox(owner, title, text, mbIconError)
-}
-
-func messageBox(owner windows.Handle, title, text string, flags uint32) int {
-	titlePtr, err := windows.UTF16PtrFromString(title)
-	if err != nil {
-		return 0
-	}
-	textPtr, err := windows.UTF16PtrFromString(text)
-	if err != nil {
-		return 0
-	}
-	ret, _, _ := procMessageBox.Call(
-		uintptr(owner),
-		uintptr(unsafe.Pointer(textPtr)),
-		uintptr(unsafe.Pointer(titlePtr)),
-		uintptr(flags),
-	)
-	return int(ret)
 }

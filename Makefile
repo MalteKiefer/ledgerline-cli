@@ -26,6 +26,24 @@ CYCLONEDX_VERSION := v1.10.0
 # Pinned Linux packager (nfpm) for the .deb/.rpm artefacts.
 NFPM_VERSION := v2.47.0
 
+# Pinned Windows resource compiler. It stamps the icon, the version fields and
+# the side-by-side manifest (themed controls + per-monitor DPI) into the two
+# .exe files; Go itself can only link a .syso, not produce one.
+GOVERSIONINFO_VERSION := v1.5.0
+
+# The icon is drawn by ./cmd/gen-icon from the same code the tray uses, so the
+# executable, the installer, the shortcut and the notification area cannot show
+# different marks.
+ICON := packaging/windows/ledgerline.ico
+
+# Numeric version parts for the Windows VERSIONINFO resource, which only accepts
+# integers: 0.7.4-66-gabc1234 becomes 0.7.4.66.
+VER_MAJOR := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f1)
+VER_MINOR := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f2)
+VER_PATCH := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f3)
+VER_BUILD_RAW := $(shell echo $(VERSION) | sed -n 's/^[0-9.]*-\([0-9]*\)-.*/\1/p')
+VER_BUILD := $(if $(VER_BUILD_RAW),$(VER_BUILD_RAW),0)
+
 # Package versions must be digits-and-dots for both dpkg and rpm; a dirty or
 # post-tag `git describe` string ("0.7.4-3-gabc1234-dirty") is normalised here.
 PKG_VERSION := $(subst -,.,$(VERSION))
@@ -46,6 +64,28 @@ PKG_ARCHES := amd64 arm64
 # work (StatusNotifierItem, Cocoa) and are not built here yet.
 GUI_PLATFORMS := windows/amd64 windows/arm64
 
+.PHONY: icon
+icon:
+	@go run ./cmd/gen-icon -o $(ICON)
+
+# resources writes one .syso per Windows architecture into each main package.
+# Go links a .syso automatically when its name matches the target, and ignores
+# it entirely on other platforms, so the Linux and macOS builds are unaffected.
+.PHONY: resources
+resources: icon
+	@set -e; for arch in amd64 arm64; do \
+		flags="-64"; [ "$$arch" = "arm64" ] && flags="-arm -64"; \
+		go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@$(GOVERSIONINFO_VERSION) \
+			$$flags -o resource_windows_$$arch.syso \
+			-ver-major $(VER_MAJOR) -ver-minor $(VER_MINOR) -ver-patch $(VER_PATCH) -ver-build $(VER_BUILD) \
+			-product-ver-major $(VER_MAJOR) -product-ver-minor $(VER_MINOR) \
+			-product-ver-patch $(VER_PATCH) -product-ver-build $(VER_BUILD) \
+			-file-version "$(VERSION)" -product-version "$(VERSION)" \
+			packaging/windows/versioninfo.json ; \
+		cp resource_windows_$$arch.syso cmd/$(GUI_BINARY)/ ; \
+	done
+	@echo "wrote Windows resource objects"
+
 .PHONY: build
 build:
 	@mkdir -p bin
@@ -57,7 +97,7 @@ install:
 	CGO_ENABLED=0 go install -trimpath -ldflags "$(LDFLAGS)" .
 
 .PHONY: release
-release:
+release: resources
 	@mkdir -p dist
 	@set -e; for platform in $(PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
@@ -150,12 +190,13 @@ package: release completions
 # makensis resolves File paths relative to the script's own directory and wants
 # backslash separators, hence the ..\..\dist form.
 .PHONY: installer-windows
-installer-windows: release
+installer-windows: release icon
 	@command -v makensis >/dev/null || { echo "makensis not found (apt-get install nsis)"; exit 1; }
 	@set -e; for arch in $(PKG_ARCHES); do \
 		echo "building dist/$(BINARY)-setup-$(VERSION)-$$arch.exe"; \
 		makensis -V2 \
 			-DVERSION=$(PKG_VERSION) \
+			-DICON=..\\..\\$(ICON) \
 			-DCLI_EXE=..\\..\\dist\\$(BINARY)-$(VERSION)-windows-$$arch.exe \
 			-DGUI_EXE=..\\..\\dist\\$(GUI_BINARY)-$(VERSION)-windows-$$arch.exe \
 			-DOUTFILE=..\\..\\dist\\$(BINARY)-setup-$(VERSION)-$$arch.exe \

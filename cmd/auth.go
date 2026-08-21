@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -111,10 +112,30 @@ func newAuthStatusCommand() *cobra.Command {
 			fmt.Fprintf(out, "Authenticated as %s <%s> (id %d)\n", user.Name, user.Email, user.ID)
 			fmt.Fprintf(out, "Server:  %s\n", sess.ServerURL)
 			fmt.Fprintf(out, "Token:   stored in the %s\n", backendLabel(sess.Backend))
-			fmt.Fprintf(out, "Usage:   %s in files, %s in gallery\n", humanBytes(usage.Files), humanBytes(usage.Gallery))
+			fmt.Fprintf(out, "Usage:   %s\n", usageSummary(usage))
 			return nil
 		},
 	}
+}
+
+// usageSummary renders the storage figures for `auth status`, breaking them out
+// per module only when the server reported the split.
+func usageSummary(u api.Usage) string {
+	total := humanBytes(u.Total())
+	if u.Quota != nil && *u.Quota > 0 {
+		total += " of " + humanBytes(*u.Quota)
+	}
+	if !u.HasBreakdown() {
+		return total
+	}
+	parts := make([]string, 0, 2)
+	if u.Files != nil {
+		parts = append(parts, humanBytes(*u.Files)+" in files")
+	}
+	if u.Gallery != nil {
+		parts = append(parts, humanBytes(*u.Gallery)+" in gallery")
+	}
+	return total + " (" + strings.Join(parts, ", ") + ")"
 }
 
 // defaultDeviceName builds a recognisable per-machine device label.

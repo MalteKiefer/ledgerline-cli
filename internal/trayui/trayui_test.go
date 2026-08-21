@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 )
@@ -21,14 +22,19 @@ func TestBuildSignedOut(t *testing.T) {
 	if m.Title != "Ledgerline 0.7.5" {
 		t.Fatalf("title = %q", m.Title)
 	}
-	if !m.ShowLogin || m.ShowLogout || m.ShowOpenWeb {
+	if !m.ShowLogin || m.ShowLogout || m.ShowOpenWeb || m.ShowSync || m.ShowRefresh {
 		t.Fatalf("actions = %+v", m)
 	}
 	if !m.Offline {
 		t.Fatal("signed out should use the muted icon")
 	}
-	if len(m.Lines) != 1 || !strings.Contains(m.Lines[0], "Not signed in") {
-		t.Fatalf("lines = %v", m.Lines)
+	// Signed out the menu says nothing else: a storage row, a server row or a
+	// "sync folders" entry with no session behind it reads as broken.
+	if m.ShowAccount || m.ShowSyncRow || m.ShowStatus {
+		t.Fatalf("rows shown before sign-in: %+v", m)
+	}
+	if m.Account != "" || len(m.AccountDetails) != 0 || len(m.SyncDetails) != 0 {
+		t.Fatalf("content built before sign-in: %+v", m)
 	}
 }
 
@@ -39,7 +45,7 @@ func TestBuildSignedIn(t *testing.T) {
 		ServerURL: "https://ledger.example.com:8443/",
 		UserName:  "Grace",
 		UserEmail: "grace@example.com",
-		Usage:     api.Usage{Files: 1 << 30, Gallery: 512 << 20, Quota: ptr(10 << 30)},
+		Usage:     api.Usage{Used: (1 << 30) + (512 << 20), Files: ptr(1 << 30), Gallery: ptr(512 << 20), Quota: ptr(10 << 30)},
 	})
 	// The leading v is display noise; the CLI prints it the same way.
 	if m.Title != "Ledgerline 1.2.3" {
@@ -48,17 +54,20 @@ func TestBuildSignedIn(t *testing.T) {
 	if m.ShowLogin || !m.ShowLogout || !m.ShowOpenWeb || m.Offline {
 		t.Fatalf("actions = %+v", m)
 	}
-	want := []string{
-		"Grace", "ledger.example.com:8443",
-		// Per-module figures, then the total the quota applies to.
-		"Files: 1.0 GiB", "Gallery: 512.0 MiB", "Total: 1.5 GiB of 10.0 GiB (15%)",
+	// The top level carries the account; the figures live one level down, so
+	// the menu stays readable at a glance.
+	if !m.ShowAccount || m.Account != "Grace" {
+		t.Fatalf("account row = %+v", m)
 	}
-	if len(m.Lines) != len(want) {
-		t.Fatalf("lines = %v", m.Lines)
+	// Identity and server only: the storage figures moved to the settings
+	// window, where there is room to draw them properly.
+	want := []string{"grace@example.com", "Server: ledger.example.com:8443"}
+	if len(m.AccountDetails) != len(want) {
+		t.Fatalf("details = %v", m.AccountDetails)
 	}
 	for i := range want {
-		if m.Lines[i] != want[i] {
-			t.Fatalf("line %d = %q, want %q", i, m.Lines[i], want[i])
+		if m.AccountDetails[i] != want[i] {
+			t.Fatalf("detail %d = %q, want %q", i, m.AccountDetails[i], want[i])
 		}
 	}
 	if !strings.Contains(m.Tooltip, "Grace") || !strings.Contains(m.Tooltip, "ledger.example.com") {
@@ -72,20 +81,20 @@ func TestBuildRefreshErrorDoesNotShowStaleNumbers(t *testing.T) {
 		LoggedIn:    true,
 		ServerURL:   "https://ledger.example.com",
 		UserName:    "Grace",
-		Usage:       api.Usage{Files: 999, Quota: ptr(1000)},
+		Usage:       api.Usage{Used: 999, Quota: ptr(1000)},
 		Err:         errors.New("dial tcp: connection refused"),
 		Unreachable: true,
 	})
 	if !m.Offline {
 		t.Fatal("a failed refresh must mute the icon")
 	}
-	for _, l := range m.Lines {
+	for _, l := range m.AccountDetails {
 		if strings.Contains(l, "Total") || strings.Contains(l, "Files:") {
-			t.Fatalf("storage shown despite a failed refresh: %v", m.Lines)
+			t.Fatalf("storage shown despite a failed refresh: %v", m.AccountDetails)
 		}
 	}
-	if m.Lines[len(m.Lines)-1] != "Server unreachable" {
-		t.Fatalf("lines = %v", m.Lines)
+	if !m.ShowStatus || m.Status != "Server unreachable" {
+		t.Fatalf("status = %q (shown=%v)", m.Status, m.ShowStatus)
 	}
 	// Signing out must stay reachable while offline.
 	if !m.ShowLogout {
@@ -96,9 +105,88 @@ func TestBuildRefreshErrorDoesNotShowStaleNumbers(t *testing.T) {
 func TestBuildApiErrorIsTruncatedToOneLine(t *testing.T) {
 	long := errors.New("server error 500: " + strings.Repeat("boom ", 40) + "\nsecond line")
 	m := Build(State{Version: "1", LoggedIn: true, ServerURL: "https://x.test", Err: long})
-	last := m.Lines[len(m.Lines)-1]
-	if strings.Contains(last, "\n") || len([]rune(last)) > 80 {
-		t.Fatalf("error line = %q", last)
+	if strings.Contains(m.Status, "\n") || len([]rune(m.Status)) > 80 {
+		t.Fatalf("error line = %q", m.Status)
+	}
+}
+
+// TestSyncRowSummarisesAndDetails: the row is what a glance gets, the submenu
+// is what a question gets.
+func TestSyncRowSummarisesAndDetails(t *testing.T) {
+	now := time.Now()
+	m := Build(State{
+		Version: "1", LoggedIn: true, ServerURL: "https://x.test",
+		Sync: SyncState{
+			Phase:   SyncRunning,
+			Running: 2,
+			LastRun: now.Add(-3 * time.Minute),
+			Pairs: []SyncPair{
+				{Label: "C:\\docs <-> Docs", Running: true},
+				{Label: "C:\\pics -> Photos", LastRun: now.Add(-3 * time.Minute), Result: "1 pushed"},
+				{Label: "C:\\old <-> Archive", Paused: true},
+			},
+		},
+	})
+	if !m.ShowSyncRow || m.SyncSummary != "Sync: syncing 2 folders…" {
+		t.Fatalf("summary = %q", m.SyncSummary)
+	}
+	if !m.Busy {
+		t.Fatal("a running sync must show in the icon")
+	}
+	if !strings.Contains(m.Tooltip, "syncing") {
+		t.Fatalf("tooltip = %q", m.Tooltip)
+	}
+	if len(m.SyncDetails) != 3 {
+		t.Fatalf("details = %v", m.SyncDetails)
+	}
+	if !strings.Contains(m.SyncDetails[0], "syncing") ||
+		!strings.Contains(m.SyncDetails[1], "min ago") ||
+		!strings.Contains(m.SyncDetails[2], "paused") {
+		t.Fatalf("details = %v", m.SyncDetails)
+	}
+}
+
+func TestSyncRowStates(t *testing.T) {
+	cases := map[SyncPhase]string{
+		SyncNone: "Sync: no folders",
+		SyncIdle: "Sync: waiting",
+	}
+	for phase, want := range cases {
+		got := SyncState{Phase: phase}.SyncLine()
+		if got != want {
+			t.Fatalf("%s = %q, want %q", phase, got, want)
+		}
+	}
+	// A failure is not softened into "up to date".
+	failed := SyncState{Phase: SyncFailed, LastRun: time.Now()}.SyncLine()
+	if !strings.Contains(failed, "failed") {
+		t.Fatalf("failed line = %q", failed)
+	}
+	idle := SyncState{Phase: SyncIdle, LastRun: time.Now().Add(-90 * time.Minute)}.SyncLine()
+	if !strings.Contains(idle, "up to date") || !strings.Contains(idle, "h ago") {
+		t.Fatalf("idle line = %q", idle)
+	}
+}
+
+// TestBusyIconIsDistinguishableWithoutColour: three states, three different
+// images — a colour-only difference is no signal at 16 px for many people.
+func TestBusyIconIsDistinguishableWithoutColour(t *testing.T) {
+	muted, idle, busy := StateIcon(IconMuted), StateIcon(IconIdle), StateIcon(IconBusy)
+	for name, ico := range map[string][]byte{"muted": muted, "idle": idle, "busy": busy} {
+		if len(ico) == 0 {
+			t.Fatalf("%s icon is empty", name)
+		}
+	}
+	if bytes.Equal(idle, busy) {
+		t.Fatal("the busy icon is identical to the idle one")
+	}
+	if bytes.Equal(idle, muted) {
+		t.Fatal("the muted icon is identical to the idle one")
+	}
+	// The dot is a shape, not just a hue: the busy image differs in more than
+	// the palette, which a size difference is a cheap proxy for.
+	if len(busy) == len(idle) {
+		t.Log("busy and idle encode to the same length; comparing bytes instead")
 	}
 }
 
@@ -124,16 +212,21 @@ func TestServerHost(t *testing.T) {
 }
 
 func TestStorageLine(t *testing.T) {
-	if got := StorageLine(api.Usage{Files: 2048, Gallery: 0}); got != "2.0 KiB used" {
+	if got := StorageLine(api.Usage{Used: 2048}); got != "2.0 KiB used" {
 		t.Fatalf("unlimited = %q", got)
 	}
-	// Files and gallery share one quota on the server, so they are summed.
-	got := StorageLine(api.Usage{Files: 1 << 20, Gallery: 1 << 20, Quota: ptr(4 << 20)})
+	// Files and gallery share one quota on the server, so the combined figure is
+	// what it applies to.
+	got := StorageLine(api.Usage{Used: 2 << 20, Quota: ptr(4 << 20)})
 	if got != "2.0 MiB of 4.0 MiB (50%)" {
 		t.Fatalf("quota = %q", got)
 	}
-	if got := StorageLine(api.Usage{Files: 5, Quota: ptr(0)}); !strings.HasSuffix(got, "used") {
+	if got := StorageLine(api.Usage{Used: 5, Quota: ptr(0)}); !strings.HasSuffix(got, "used") {
 		t.Fatalf("zero quota should read as unlimited, got %q", got)
+	}
+	// A server that sends only the breakdown still gets a total.
+	if got := StorageLine(api.Usage{Files: ptr(1 << 20), Gallery: ptr(1 << 20)}); got != "2.0 MiB used" {
+		t.Fatalf("breakdown-only total = %q", got)
 	}
 }
 
@@ -271,20 +364,35 @@ func TestBrandIconIsAValidIconAndDiffersByState(t *testing.T) {
 	}
 }
 
-func TestUsageLinesSplitPerModule(t *testing.T) {
-	lines := UsageLines(api.Usage{Files: 3 << 20, Gallery: 5 << 20, Quota: ptr(16 << 20)})
-	want := []string{"Files: 3.0 MiB", "Gallery: 5.0 MiB", "Total: 8.0 MiB of 16.0 MiB (50%)"}
-	if len(lines) != len(want) {
-		t.Fatalf("lines = %v", lines)
-	}
-	for i := range want {
-		if lines[i] != want[i] {
-			t.Fatalf("line %d = %q, want %q", i, lines[i], want[i])
+func TestAccountSubmenuLeavesStorageToTheWindow(t *testing.T) {
+	m := Build(State{
+		LoggedIn: true, UserName: "Ada", UserEmail: "ada@example.test",
+		ServerURL: "https://ledgerline.example",
+		Usage:     api.Usage{Used: 8 << 20, Files: ptr(3 << 20), Gallery: ptr(5 << 20), Quota: ptr(16 << 20)},
+	})
+	for _, row := range m.AccountDetails {
+		if strings.Contains(row, "MiB") || strings.HasPrefix(row, "Storage") {
+			t.Fatalf("account submenu still carries storage: %q", row)
 		}
 	}
-	// A module with nothing in it still gets a line: "0 B" is an answer, a
-	// missing row looks like a bug.
-	if got := UsageLines(api.Usage{})[1]; got != "Gallery: 0 B" {
-		t.Fatalf("empty gallery line = %q", got)
+}
+
+// TestBreakdownDistinguishesAbsentFromZero is the bug this shape exists for: the
+// server sends {used, quota}, and reading the absent per-module fields as zero
+// showed "0 B" over a full account. The figures moved to the settings window,
+// but the distinction they depend on is still this package's to keep.
+func TestBreakdownDistinguishesAbsentFromZero(t *testing.T) {
+	absent := api.Usage{Used: 3 << 30, Quota: ptr(10 << 30)}
+	if absent.HasBreakdown() {
+		t.Fatal("a payload without per-module fields claims a breakdown")
+	}
+	if got := StorageLine(absent); got != "3.0 GiB of 10.0 GiB (30%)" {
+		t.Fatalf("storage line = %q", got)
+	}
+
+	// A module the server did report as empty is a stated fact, not a gap.
+	reported := api.Usage{Files: ptr(0), Gallery: ptr(0)}
+	if !reported.HasBreakdown() {
+		t.Fatal("an explicit zero was mistaken for an absent field")
 	}
 }

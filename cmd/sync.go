@@ -16,6 +16,7 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/audit"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
 	"github.com/MalteKiefer/ledgerline-cli/internal/syncconfig"
+	"github.com/MalteKiefer/ledgerline-cli/internal/syncrunner"
 )
 
 // newSyncCommand builds the `sync` group: several folder pairs, remembered.
@@ -47,7 +48,7 @@ func newSyncCommand() *cobra.Command {
 func newSyncAddCommand() *cobra.Command {
 	var remote, direction, conflict string
 	var interval time.Duration
-	var disabled bool
+	var disabled, noWatch bool
 
 	cmd := &cobra.Command{
 		Use:   "add <local-dir>",
@@ -61,6 +62,7 @@ func newSyncAddCommand() *cobra.Command {
 				Conflict:        conflict,
 				IntervalMinutes: int(interval.Minutes()),
 				Enabled:         !disabled,
+				Watch:           !noWatch,
 			})
 			if err != nil {
 				return err
@@ -73,7 +75,9 @@ func newSyncAddCommand() *cobra.Command {
 	cmd.Flags().StringVar(&remote, "remote", "", "remote folder path (default: the remote root)")
 	cmd.Flags().StringVar(&direction, "direction", syncconfig.DirectionBoth, "both, push, or pull")
 	cmd.Flags().StringVar(&conflict, "conflict", syncconfig.ConflictNewest, "both-sides change policy: newest, keep-both, or skip")
-	cmd.Flags().DurationVar(&interval, "interval", syncconfig.DefaultInterval, "automatic re-sync period; 0 for manual only")
+	cmd.Flags().DurationVar(&interval, "interval", syncconfig.DefaultInterval,
+		"periodic re-sync (0 to rely on change detection alone)")
+	cmd.Flags().BoolVar(&noWatch, "no-watch", false, "do not sync on local file changes, only on the interval")
 	cmd.Flags().BoolVar(&disabled, "disabled", false, "add the pair but do not run it yet")
 	return cmd
 }
@@ -128,7 +132,7 @@ func newSyncRemoveCommand() *cobra.Command {
 func newSyncSetCommand() *cobra.Command {
 	var direction, conflict string
 	var interval time.Duration
-	var enable, disable bool
+	var enable, disable, watch, noWatch bool
 
 	cmd := &cobra.Command{
 		Use:   "set <id>",
@@ -137,6 +141,9 @@ func newSyncSetCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if enable && disable {
 				return errors.New("--enable and --disable are mutually exclusive")
+			}
+			if watch && noWatch {
+				return errors.New("--watch and --no-watch are mutually exclusive")
 			}
 			flags := cmd.Flags()
 			pair, err := syncconfig.Update(args[0], func(p *syncconfig.Pair) {
@@ -155,6 +162,12 @@ func newSyncSetCommand() *cobra.Command {
 				if disable {
 					p.Enabled = false
 				}
+				if watch {
+					p.Watch = true
+				}
+				if noWatch {
+					p.Watch = false
+				}
 			})
 			if err != nil {
 				return err
@@ -170,6 +183,8 @@ func newSyncSetCommand() *cobra.Command {
 	cmd.Flags().StringVar(&direction, "direction", "", "both, push, or pull")
 	cmd.Flags().StringVar(&conflict, "conflict", "", "newest, keep-both, or skip")
 	cmd.Flags().DurationVar(&interval, "interval", 0, "automatic re-sync period; 0 for manual only")
+	cmd.Flags().BoolVar(&watch, "watch", false, "sync as soon as a local file changes")
+	cmd.Flags().BoolVar(&noWatch, "no-watch", false, "only sync on the interval")
 	cmd.Flags().BoolVar(&enable, "enable", false, "run this pair again")
 	cmd.Flags().BoolVar(&disable, "disable", false, "stop running this pair")
 	return cmd
@@ -231,17 +246,18 @@ func newSyncRunCommand() *cobra.Command {
 }
 
 func newSyncServiceCommand() *cobra.Command {
-	var tick time.Duration
+	var tick, debounce time.Duration
 	cmd := &cobra.Command{
 		Use:   "service",
-		Short: "Keep running, syncing each pair on its own schedule",
-		Long: "Run until interrupted, syncing every enabled pair when its interval is\n" +
-			"due. This is the same loop the desktop tray runs; use it on a machine\n" +
-			"without a tray, or under a service manager.",
+		Short: "Keep running: sync on each pair's schedule and when files change",
+		Long: "Run until interrupted. Every enabled pair is synced when its interval is\n" +
+			"due and, unless it was added with --no-watch, as soon as something in its\n" +
+			"local directory changes. This is the same loop the desktop tray runs; use\n" +
+			"it on a machine without a tray, or under a service manager.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := authedClient(cmd.Context())
-			if err != nil {
+			// Fail early on a signed-out client rather than looping quietly.
+			if _, err := authedClient(cmd.Context()); err != nil {
 				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -249,43 +265,23 @@ func newSyncServiceCommand() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Watching configured pairs (checking every %s). Ctrl-C to stop.\n", tick)
-			ticker := time.NewTicker(tick)
-			defer ticker.Stop()
-			for {
-				RunDuePairs(ctx, client, out)
-				select {
-				case <-ctx.Done():
-					fmt.Fprintln(out, "Stopped.")
-					return nil
-				case <-ticker.C:
-				}
-			}
+
+			runner := syncrunner.New(
+				func() (*api.Client, error) { return authedClient(ctx) },
+				syncrunner.Options{
+					Tick:     tick,
+					Debounce: debounce,
+					Log:      func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) },
+				})
+			runner.Run(ctx)
+			fmt.Fprintln(out, "Stopped.")
+			return nil
 		},
 	}
-	cmd.Flags().DurationVar(&tick, "check-every", time.Minute, "how often to look for pairs that are due")
+	cmd.Flags().DurationVar(&tick, "check-every", syncrunner.DefaultTick, "how often to look for pairs that are due")
+	cmd.Flags().DurationVar(&debounce, "settle", syncrunner.DefaultDebounce,
+		"how long to wait for file changes to stop before syncing")
 	return cmd
-}
-
-// RunDuePairs syncs every pair whose interval has elapsed. It is exported
-// because the tray runs exactly this loop body.
-func RunDuePairs(ctx context.Context, client *api.Client, out io.Writer) {
-	f, err := syncconfig.Load()
-	if err != nil {
-		fmt.Fprintf(out, "could not read the sync configuration: %v\n", err)
-		return
-	}
-	now := time.Now()
-	for _, p := range f.Pairs {
-		if ctx.Err() != nil {
-			return
-		}
-		if !p.Due(now) {
-			continue
-		}
-		if err := runPair(ctx, client, p, out); err != nil {
-			fmt.Fprintf(out, "pair %s failed: %v\n", p.ID, err)
-		}
-	}
 }
 
 // runPair syncs one pair and records the outcome, so a pair that has been

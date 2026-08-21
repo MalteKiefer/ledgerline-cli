@@ -43,10 +43,37 @@ type DisplayPreferences struct {
 // files+gallery byte limit; nil means unlimited (the server sends null whenever
 // either dimension is uncapped).
 type Usage struct {
-	Files   int64  `json:"files"`
-	Gallery int64  `json:"gallery"`
-	Quota   *int64 `json:"quota"`
+	// Used is the combined figure the quota applies to. The server sends this
+	// one; reading `files`/`gallery` instead is what made the tray report 0 B
+	// against a real account.
+	Used  int64  `json:"used"`
+	Quota *int64 `json:"quota"`
+
+	// Files and Gallery are the per-module breakdown. Older servers do not send
+	// them, so they are pointers: absent is "unknown", not "zero" — a tray must
+	// not claim an empty gallery it was never told about.
+	Files   *int64 `json:"files"`
+	Gallery *int64 `json:"gallery"`
 }
+
+// Total is the combined usage, falling back to the parts when a server reports
+// only the breakdown.
+func (u Usage) Total() int64 {
+	if u.Used > 0 {
+		return u.Used
+	}
+	var sum int64
+	if u.Files != nil {
+		sum += *u.Files
+	}
+	if u.Gallery != nil {
+		sum += *u.Gallery
+	}
+	return sum
+}
+
+// HasBreakdown reports whether the server told us how the usage splits.
+func (u Usage) HasBreakdown() bool { return u.Files != nil || u.Gallery != nil }
 
 // Device is one connected device (Sanctum token) from GET /api/v1/devices.
 type Device struct {

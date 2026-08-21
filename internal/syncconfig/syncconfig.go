@@ -50,9 +50,15 @@ type Pair struct {
 	Direction string `json:"direction"`
 	Conflict  string `json:"conflict"`
 
-	// IntervalMinutes is the automatic re-sync period. Zero means manual only.
+	// IntervalMinutes is the automatic re-sync period. Zero means "only when
+	// something changes" if Watch is on, and manual otherwise.
 	IntervalMinutes int  `json:"interval_minutes"`
 	Enabled         bool `json:"enabled"`
+
+	// Watch syncs as soon as a file in the local directory changes, instead of
+	// waiting out the interval. Defaults to on for a new pair: waiting fifteen
+	// minutes to see your own edit is what makes a sync client feel broken.
+	Watch bool `json:"watch"`
 
 	// Outcome of the last run, so the tray can show something other than a
 	// blank row and a user can see that a pair has been failing quietly.
@@ -97,6 +103,13 @@ func (p Pair) Describe() string {
 	schedule := "manual"
 	if every := p.Interval(); every > 0 {
 		schedule = every.String()
+	}
+	if p.Watch {
+		if schedule == "manual" {
+			schedule = "on change"
+		} else {
+			schedule += " + on change"
+		}
 	}
 	state := "on"
 	if !p.Enabled {
@@ -305,6 +318,11 @@ func Normalise(p Pair) (Pair, error) {
 
 	if p.IntervalMinutes < 0 {
 		return Pair{}, errors.New("interval cannot be negative")
+	}
+	// A day is already an odd choice for a sync interval; beyond that it is
+	// almost certainly a units mistake (minutes typed as seconds, say).
+	if p.IntervalMinutes > 7*24*60 {
+		return Pair{}, errors.New("interval is longer than a week")
 	}
 	return p, nil
 }

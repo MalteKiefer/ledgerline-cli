@@ -70,8 +70,17 @@ releases page and run it. It installs both programs into
 and creates Start-menu shortcuts. Two options are offered during setup: adding
 the install directory to `PATH` (on by default, so `ledgerline-cli` works in any
 terminal) and starting the tray icon when you sign in (off by default).
-Uninstalling removes the programs but leaves your credential and configuration
-untouched.
+
+It also creates `C:\Program Files\Ledgerline\logs`, where the tray writes what
+it has been doing — refreshes, sign-outs, every sync and every failure — because
+a program with no window has nowhere else to say it. The directory is made
+writable for the machine's users so a normal account can actually write there;
+on a shared machine that means another user can read those lines, which is why
+the log records events and never a token, a password or a code. **Settings →
+About → Open log folder** takes you there.
+
+Uninstalling removes the programs and their logs, and leaves your credential and
+configuration untouched.
 
 The installer is not Authenticode-signed, so SmartScreen warns on first run —
 verify the download against `checksums.txt` as shown below.
@@ -326,23 +335,34 @@ trash.
 
 ### Tray application (Windows)
 
-`ledgerline-gui.exe` sits in the notification area and answers the questions you
-would otherwise run three commands for. Its menu shows:
+`ledgerline-gui.exe` sits in the notification area. Signed out it offers one
+thing — **Sign in…** — because a storage figure or a "synced folders" entry with
+no session behind it reads as broken rather than as waiting.
 
-- the client version
-- the signed-in account, with its profile picture as the item's icon
-- the server host
-- storage per module and in total: `Files: 1.0 GiB`, `Gallery: 512.0 MiB`,
-  `Total: 1.5 GiB of 10.0 GiB (15%)` — files and gallery share one quota
+Signed in, the menu is two rows and their submenus, so it stays readable at a
+glance:
 
-and offers **Sign in…**, **Synced folders…**, **Sign out**, **Open web app**,
-**Refresh** and **Quit**. The icon is muted while you are signed out or the
-server cannot be reached; a failed refresh says so instead of showing stale
-numbers.
+- **the account**, with its profile picture as the row's icon; its submenu has
+  your e-mail, the server, and storage (`Files:`, `Gallery:`, `Total:` when the
+  server reports the split, one `Storage:` line when it does not)
+- **the sync state** — `Sync: up to date (4 min ago)`, `Sync: syncing 2
+  folders…`, `Sync: last run failed`; its submenu lists each folder pair and
+  what happened to it
+
+plus **Settings…**, **Sign out**, **Open web app**, **Refresh**, **Open log
+folder** and **Quit**.
+
+The tray icon has three states, told apart by shape and not only colour: muted
+while you are signed out or the server cannot be reached, the plain mark when
+everything is current, and the mark with a green dot while a sync is running.
 
 It reads the same credential as the CLI, so signing in through either one signs
 in both, and it honours the same remote kill switch: a revoked device clears its
 credential on the next refresh.
+
+**Settings…** opens one window with three tabs: **Profile** (who you are, the
+server, storage, and sign-out), **Synced folders** (below), and **About** (the
+build, and where its settings and logs live).
 
 **Sign in…** opens a proper window — no browser, no console — and lets you pick
 how you sign in:
@@ -354,7 +374,7 @@ how you sign in:
   but that code leaves the web app, so your password is never typed into this
   program at all.
 
-**Synced folders…** is where the folder pairs live — see below.
+
 
 The state refreshes every five minutes, on demand via **Refresh**, and right
 after a sign-in or sign-out.
@@ -367,19 +387,26 @@ group, which the tray reads and writes as well:
 
 ```sh
 ledgerline-cli sync add ~/Documents --remote Documents --interval 15m
-ledgerline-cli sync add ~/Pictures  --remote Photos --direction push
+ledgerline-cli sync add ~/Pictures  --remote Photos --direction push --no-watch
 ledgerline-cli sync ls
 ledgerline-cli sync set 2 --disable        # pause it; nothing is deleted
+ledgerline-cli sync set 2 --interval 5m --watch
 ledgerline-cli sync run 1                  # sync one pair now
 ledgerline-cli sync run --all              # every enabled pair
-ledgerline-cli sync service                # keep running on each pair's schedule
+ledgerline-cli sync service                # keep running: schedule + file changes
 ```
 
-In the tray, **Synced folders…** shows the same list with **Add folder…**
-(a folder picker; the remote folder defaults to the folder's own name),
-**Pause/Resume**, **Sync now**, **Sync all** and **Remove**. The tray runs due
-pairs in the background while it is open, so a laptop that is simply on stays
-up to date.
+Each pair syncs **when a local file changes** (within a few seconds, after the
+writes settle) and **on its interval**, and either can be turned off: `--no-watch`
+for interval only, `--interval 0` for change detection only. The tray runs the
+same loop while it is open, so a laptop that is simply on stays up to date.
+
+In **Settings → Synced folders** the same list has **Add folder…**, **Edit…**,
+**Pause/Resume**, **Sync now**, **Sync all** and **Remove**. Adding or editing
+opens a form where **both ends are chosen**: the local folder with the shell
+picker, the remote folder from the server's own tree (**Browse…**), plus the
+direction, the conflict policy, the interval in minutes and whether to watch for
+changes. The remote folder is never guessed from the local folder's name.
 
 Two things worth knowing:
 
@@ -582,7 +609,10 @@ internal/api/           typed /api/v1 client; files split by feature area
 internal/files/         local helpers: tree render, two-way sync, watch service
 internal/webdavfs/      webdav.FileSystem over the Files API (the mount backend)
 internal/trayui/        tray menu model, avatar and brand icons (platform-free, tested)
-internal/win32ui/       tiny Win32 toolkit: window, fields, buttons, list, folder picker
+internal/deskui/        the desktop windows: a WebView2 host styled with the web app's tokens
+internal/win32ui/       the one native dialog left: the shell folder chooser
+internal/syncrunner/    the loop both front ends run: interval + file-change detection
+internal/applog/        the desktop client's log file (rotating, next to the programs)
 internal/authflow/      password (+2FA) and one-time-code sign-in, shared by CLI and GUI
 internal/syncconfig/    the folder pairs, shared by the CLI and the tray
 internal/installid/     stable per-installation id, so a re-login replaces its device

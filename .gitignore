@@ -2,6 +2,11 @@
 /bin/
 /dist/
 
+# Generated Windows resources: the icon is drawn by ./cmd/gen-icon and the .syso
+# objects are compiled from it, so both are build output rather than source.
+*.syso
+/packaging/windows/ledgerline.ico
+
 # Go
 *.test
 *.out
@@ -19,3 +24,4 @@ coverage.txt
 *.pem
 *.key
 *token*
+.claude/checkpoints/

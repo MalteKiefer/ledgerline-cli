@@ -9,11 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The windows look like the web app.** Settings and sign-in are now drawn the
+  same way the Ledgerline web app is, with the same colours, spacing and dark
+  mode, instead of looking like a dialog from an older Windows. They need the
+  Microsoft Edge WebView2 runtime, which Windows 11 already has.
+- **Your picture and your storage moved into Settings.** The tray menu was too
+  small a place for them. Profile now shows your avatar and a bar for how much
+  space you are using, split into files and gallery when the server reports it.
+- **The folder list reads as a list.** Each row shows the local folder, where it
+  goes on the server and when it runs, with a plain badge for on, paused,
+  syncing or failed. Adding and editing a folder happens in the same window.
 - **Windows tray application (`ledgerline-gui`).** A tray icon showing the
-  version, the signed-in account with its profile picture, the server, and your
-  storage broken out per module — Files, Gallery, and the total against your
-  quota — with Sign in, Synced folders, Sign out, Open web app, Refresh and Quit
-  in its menu. It shares the CLI's credential, certificate pins and remote kill
+  version, the signed-in account and the server, with Sign in, Settings, Sign
+  out, Open web app, Refresh and Quit in its menu. It shares the CLI's credential, certificate pins and remote kill
   switch, so both see the same session.
 - **Sign in with your password, or with a code — your choice.** The tray opens a
   proper window (no browser, no console) with both routes on screen: e-mail and
@@ -23,14 +31,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   issues nothing until the code is right, and a recovery code works in its
   place. The password is typed without being echoed, can be piped in with
   `--password-stdin`, and is never written anywhere.
+- **Settings window.** The tray's **Settings…** opens one window with three
+  tabs: **Profile** (who you are, which server, how much storage, and Sign out),
+  **Synced folders**, and **About** (version, where the program keeps its
+  settings, and a button to its log folder).
+- **The tray says what it is doing.** Signed out it shows only "Sign in…".
+  Signed in it is two rows — your account and the sync state — each opening a
+  submenu with the detail, so the menu stays readable. The icon is muted when
+  signed out or offline, plain when everything is current, and carries a green
+  dot while a sync is running.
+- **A log you can find.** The installer creates a `logs` folder next to the
+  programs and the tray writes there: refreshes, sign-outs, every sync and every
+  failure. **Settings → About → Open log folder** opens it. It never contains
+  your token, password or two-factor code.
+- **One tray at a time.** Starting the tray while it is already running no
+  longer adds a second icon (and a second sync loop).
 - **Synced folders.** Set up as many folder pairs as you like, each with its own
   remote folder, direction, conflict policy and schedule: `sync add`, `sync ls`,
   `sync set`, `sync rm`, `sync run`, and `sync service` to keep them running.
-  The tray has the same list under "Synced folders…", with a folder picker,
-  Pause/Resume and Sync now, and it syncs due folders in the background while it
-  is open. Removing a pair deletes nothing — it stops the arrangement, and your
-  files stay where they are on both sides. Deletions are still never propagated
-  between the two.
+  A pair syncs **as soon as a local file changes** as well as on its interval —
+  either can be switched off (`--no-watch`, or `--interval 0`). In Settings →
+  Synced folders, adding or editing a pair asks for **both** ends: the local
+  folder from the usual picker and the remote folder from your server's own
+  folder tree, plus the interval in minutes. Removing a pair deletes nothing —
+  it stops the arrangement, and your files stay where they are on both sides.
+  Deletions are still never propagated between the two.
 - **Windows installer.** One setup .exe per architecture installs both the CLI
   and the tray application, creates Start-menu shortcuts, optionally adds the
   install directory to PATH and optionally starts the tray at sign-in, and
