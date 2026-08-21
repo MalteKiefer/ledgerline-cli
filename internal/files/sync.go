@@ -41,6 +41,13 @@ type SyncOptions struct {
 	// directory could only ever be a second copy of the same remote root, which
 	// is why more than one sync pair needs it.
 	RemoteRoot string
+
+	// Skip, when set, is asked for every local file and directory name. A true
+	// answer leaves it out entirely — not counted as skipped, because it was
+	// never a candidate. This is how the desktop client keeps editor scratch
+	// files and OS metadata out of a sync; the name alone is passed, not the
+	// path, because "*.tmp" is about what a file is rather than where it sits.
+	Skip func(name string) bool
 }
 
 // SyncResult counts what one pass did.
@@ -72,7 +79,7 @@ func Sync(ctx context.Context, c *api.Client, localDir string, opts SyncOptions,
 	if err := rm.scopeTo(opts.RemoteRoot); err != nil {
 		return res, err
 	}
-	local, err := scanLocal(localDir)
+	local, err := scanLocal(localDir, opts.Skip)
 	if err != nil {
 		return res, err
 	}
@@ -195,13 +202,19 @@ type localEntry struct {
 
 // scanLocal walks root, returning every regular file keyed by its slash-separated
 // path relative to root. Hidden files/dirs (leading dot) are skipped.
-func scanLocal(root string) (map[string]localEntry, error) {
+func scanLocal(root string, skip func(string) bool) (map[string]localEntry, error) {
 	out := map[string]localEntry{}
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		base := d.Name()
+		if p != root && skip != nil && skip(base) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if p != root && strings.HasPrefix(base, ".") {
 			if d.IsDir() {
 				return filepath.SkipDir

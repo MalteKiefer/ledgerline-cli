@@ -9,9 +9,16 @@ package main
 const settingsBody = `
 <div class="app">
   <div class="tabs" role="tablist">
-    <button class="tab" role="tab" aria-selected="true"  onclick="show(0)">Profile</button>
-    <button class="tab" role="tab" aria-selected="false" onclick="show(1)">Synced folders</button>
-    <button class="tab" role="tab" aria-selected="false" onclick="show(2)">About</button>
+    <button class="tab" role="tab" aria-selected="true"  onclick="show(0)">
+      <svg class="ic sm"><use href="#i-account"/></svg>Profile</button>
+    <button class="tab" role="tab" aria-selected="false" onclick="show(1)">
+      <svg class="ic sm"><use href="#i-settings"/></svg>General</button>
+    <button class="tab" role="tab" aria-selected="false" onclick="show(2)">
+      <svg class="ic sm"><use href="#i-sync"/></svg>Synced folders</button>
+    <button class="tab" role="tab" aria-selected="false" onclick="show(3)">
+      <svg class="ic sm"><use href="#i-gallery"/></svg>Photos</button>
+    <button class="tab" role="tab" aria-selected="false" onclick="show(4)">
+      <svg class="ic sm"><use href="#i-info"/></svg>About</button>
   </div>
 
   <div class="body">
@@ -42,18 +49,20 @@ const settingsBody = `
       <p class="status" id="p-status"></p>
 
       <div class="row">
-        <button class="danger" id="p-signout" onclick="doSignOut()">Sign out</button>
-        <button onclick="openWebApp()">Open web app</button>
+        <button class="danger" id="p-signout" onclick="doSignOut()"><svg class="ic"><use href="#i-logout"/></svg>Sign out</button>
+        <button onclick="openWebApp('')"><svg class="ic"><use href="#i-external"/></svg>Open web app</button>
         <div class="spacer"></div>
-        <button class="quiet" onclick="refreshProfile()">Refresh</button>
+        <button class="quiet" onclick="refreshProfile()"><svg class="ic"><use href="#i-refresh"/></svg>Refresh</button>
       </div>
     </section>
 
+    ` + generalBody + `
+
     <!-- ------------------------------------------------------- folders -- -->
-    <section class="page" id="page-1" hidden>
+    <section class="page" id="page-2" hidden>
       <div class="row" style="margin-bottom:14px">
-        <button class="primary" onclick="openPair(null)">Add folder…</button>
-        <button id="f-run-all" onclick="runAll()">Sync all</button>
+        <button class="primary" onclick="openPair(null)"><svg class="ic"><use href="#i-add"/></svg>Add folder…</button>
+        <button id="f-run-all" onclick="runAll()"><svg class="ic"><use href="#i-sync"/></svg>Sync all</button>
       </div>
 
       <div class="list" id="pairs"></div>
@@ -61,8 +70,10 @@ const settingsBody = `
 here or on the server, and deletions are never propagated either way.</p>
     </section>
 
+    ` + galleryBody + `
+
     <!-- --------------------------------------------------------- about -- -->
-    <section class="page" id="page-2" hidden>
+    <section class="page" id="page-4" hidden>
       <div class="card">
         <h2>Build</h2>
         <dl class="rows">
@@ -80,8 +91,8 @@ here or on the server, and deletions are never propagated either way.</p>
           <dt>Logs</dt><dd class="pick" id="a-logs"></dd>
         </dl>
         <div class="row" style="margin-top:14px">
-          <button onclick="openPath('folder', about.logDir)">Open log folder</button>
-          <button onclick="openPath('folder', about.configDir)">Open settings folder</button>
+          <button onclick="openPath('folder', about.logDir)"><svg class="ic"><use href="#i-folder"/></svg>Open log folder</button>
+          <button onclick="openPath('folder', about.configDir)"><svg class="ic"><use href="#i-settings"/></svg>Open settings folder</button>
         </div>
       </div>
       <div class="card">
@@ -150,7 +161,7 @@ here or on the server, and deletions are never propagated either way.</p>
   </div>
 </div>`
 
-const settingsScript = `
+const settingsScript = generalScript + galleryScript + `
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -159,11 +170,18 @@ let about = {}, pairs = [], selected = null, editing = null, busy = false;
 
 /* ------------------------------------------------------------- tabs ------ */
 
+function ic(name) { return '<svg class="ic"><use href="#i-' + name + '"/></svg>'; }
+
 function show(i) {
   document.querySelectorAll('.tab').forEach((t, n) => t.setAttribute('aria-selected', n === i));
   document.querySelectorAll('.page').forEach((p, n) => { p.hidden = n !== i; });
-  if (i === 1) refreshPairs();
-  if (i === 2) refreshAbout();
+  // Each tab reads its own data when it becomes visible rather than all of it
+  // up front: the General tab asks the server for the version cap, and paying
+  // for that on a window that opens on Profile is paying for nothing.
+  if (i === 1) refreshGeneral();
+  if (i === 2) refreshPairs();
+  if (i === 3) refreshGallery();
+  if (i === 4) refreshAbout();
 }
 
 /* ---------------------------------------------------------- profile ------ */
@@ -263,10 +281,11 @@ function rowActions() {
   if (!p) return '';
   return '<div class="item" style="cursor:default;background:transparent">' +
     '<div class="row grow">' +
-    '<button onclick="openPair(\'' + esc(p.id) + '\')">Edit…</button>' +
-    '<button onclick="syncOne()">Sync now</button>' +
-    '<button onclick="toggleOne()">' + (p.enabled ? 'Pause' : 'Resume') + '</button>' +
-    '<button class="danger" onclick="removeOne()">Remove</button>' +
+    '<button onclick="openPair(\'' + esc(p.id) + '\')">' + ic('edit') + 'Edit…</button>' +
+    '<button onclick="syncOne()">' + ic('sync') + 'Sync now</button>' +
+    '<button onclick="toggleOne()">' + ic(p.enabled ? 'pause' : 'play') +
+      (p.enabled ? 'Pause' : 'Resume') + '</button>' +
+    '<button class="danger" onclick="removeOne()">' + ic('delete') + 'Remove</button>' +
     '</div></div>';
 }
 

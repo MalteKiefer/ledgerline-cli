@@ -25,6 +25,8 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/applog"
 	"github.com/MalteKiefer/ledgerline-cli/internal/clientset"
+	"github.com/MalteKiefer/ledgerline-cli/internal/deskintegrate"
+	"github.com/MalteKiefer/ledgerline-cli/internal/deskprefs"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/trayui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/version"
@@ -46,6 +48,18 @@ const requestTimeout = 20 * time.Second
 const detailSlots = 5
 
 func main() {
+	// A context-menu verb is a different program wearing the same executable:
+	// it does one job and exits. It runs before the single-instance check on
+	// purpose — the tray is expected to be running already, and a verb that
+	// refused to start because of that would make the whole menu useless.
+	if req, ok := contextArgs(os.Args[1:]); ok {
+		log := openLog()
+		defer log.Close()
+		log.Printf("context verb %s on %s", req.Verb, req.Path)
+		runContextVerb(log, req)
+		return
+	}
+
 	// One tray per user. Two instances mean two icons and two background sync
 	// loops racing on the same configuration file.
 	if !singleInstance() {
@@ -70,6 +84,7 @@ type app struct {
 	details  []*systray.MenuItem
 	syncRow  *systray.MenuItem
 	syncSub  []*systray.MenuItem
+	pause    *systray.MenuItem
 	status   *systray.MenuItem
 	login    *systray.MenuItem
 	settings *systray.MenuItem
@@ -125,7 +140,11 @@ func (a *app) onReady() {
 	systray.AddSeparator()
 
 	a.login = systray.AddMenuItem("Sign in…", "Sign in to a Ledgerline server")
-	a.settings = systray.AddMenuItem("Settings…", "Profile, synced folders and program information")
+	// Pause is the one control people reach for in a tray menu, so it is not
+	// buried in a window. It survives a restart, which is why the label has to
+	// be repainted from the stored preference rather than from a click.
+	a.pause = systray.AddMenuItem("Pause syncing", "Stop syncing on a schedule until turned back on")
+	a.settings = systray.AddMenuItem("Settings…", "Preferences, synced folders, photos and program information")
 	a.openWeb = systray.AddMenuItem("Open web app", "Open the server in your browser")
 	a.logout = systray.AddMenuItem("Sign out", "Revoke this device's token")
 	systray.AddSeparator()
@@ -134,8 +153,14 @@ func (a *app) onReady() {
 	a.quit = systray.AddMenuItem("Quit", "Close the tray icon")
 
 	// The folder pairs run whether or not their window is open; that is the
-	// point of a tray application.
+	// point of a tray application. So does the camera folder, when one is set.
 	startSyncRunner(context.Background(), a.log, a.syncChanged)
+	startCameraWatcher(context.Background(), a.log, a.syncChanged)
+
+	// The shell menu is registered from here rather than by the installer, so it
+	// follows the preference and the chosen language. Doing it at startup also
+	// repairs a registration another tool removed.
+	a.applyExplorerMenu()
 
 	go a.loop()
 }
@@ -151,6 +176,8 @@ func (a *app) loop() {
 		select {
 		case <-a.login.ClickedCh:
 			a.startLogin()
+		case <-a.pause.ClickedCh:
+			a.togglePause()
 		case <-a.settings.ClickedCh:
 			a.openSettingsWindow()
 		case <-a.logout.ClickedCh:
@@ -437,4 +464,72 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	b.data = append(b.data, p...)
 	return len(p), nil
+}
+
+// contextArgs reads a "--context <verb> <path>" invocation.
+//
+// Anything else — no arguments, or ones we do not recognise — is not an error:
+// this executable is also the tray, and starting the tray is what happens when
+// nobody asked for a verb.
+func contextArgs(args []string) (contextRequest, bool) {
+	for i, a := range args {
+		if a != "--context" || i+2 >= len(args) {
+			continue
+		}
+		verb := strings.TrimSpace(args[i+1])
+		target := strings.TrimSpace(args[i+2])
+		if verb == "" || target == "" {
+			return contextRequest{}, false
+		}
+		return contextRequest{Verb: verb, Path: target}, true
+	}
+	return contextRequest{}, false
+}
+
+// togglePause flips scheduled syncing and repaints the menu item.
+func (a *app) togglePause() {
+	p, err := deskprefs.Update(func(p *deskprefs.Prefs) { p.Paused = !p.Paused })
+	if err != nil {
+		a.log.Printf("could not change the pause setting: %v", err)
+		return
+	}
+	a.log.Printf("scheduled syncing %s", map[bool]string{true: "paused", false: "resumed"}[p.Paused])
+	a.paintPause(p.Paused)
+	a.reload()
+}
+
+// paintPause labels the item for what pressing it will do next.
+func (a *app) paintPause(paused bool) {
+	if paused {
+		a.pause.SetTitle("Resume syncing")
+		a.pause.SetTooltip("Scheduled syncing is paused")
+		return
+	}
+	a.pause.SetTitle("Pause syncing")
+	a.pause.SetTooltip("Stop syncing on a schedule until turned back on")
+}
+
+// applyExplorerMenu brings the shell registration in line with the preference.
+//
+// Failure is logged and otherwise ignored: a context menu that could not be
+// registered is a missing convenience, not a reason to refuse to run.
+func (a *app) applyExplorerMenu() {
+	p, err := deskprefs.Load()
+	if err != nil {
+		return
+	}
+	a.paintPause(p.Paused)
+
+	if !p.ExplorerMenu {
+		if deskintegrate.ExplorerMenuRegistered() {
+			if err := deskintegrate.UnregisterExplorerMenu(); err != nil {
+				a.log.Printf("could not remove the Explorer menu: %v", err)
+			}
+		}
+		return
+	}
+	files, dirs := explorerMenus()
+	if err := deskintegrate.RegisterExplorerMenu(files, dirs); err != nil {
+		a.log.Printf("could not register the Explorer menu: %v", err)
+	}
 }

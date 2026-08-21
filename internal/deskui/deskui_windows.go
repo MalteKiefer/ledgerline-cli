@@ -103,6 +103,8 @@ func page(opts Options) string {
 	b.WriteString(`"><style>`)
 	b.WriteString(baseCSS)
 	b.WriteString("</style></head><body>")
+	// The icon definitions go first so a <use> anywhere in the body resolves.
+	b.WriteString(Sprite())
 	b.WriteString(opts.Body)
 	b.WriteString("<script>")
 	b.WriteString(opts.Script)

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Settings that a desktop client should have.** A General tab with: start
+  Ledgerline when you sign in, pause syncing (it stays paused after a restart),
+  don't sync on battery or on a metered connection, transfer limits, how many
+  versions of a file the server keeps, and a list of names never to sync —
+  scratch files, `Thumbs.db`, partial downloads.
+- **Right-click menu in Explorer.** Copy a share link, encrypt or decrypt with
+  your keys, upload, add to the gallery, or start syncing a folder — without
+  opening the app. On Windows 11 it is under “Show more options”. It can be
+  turned off in Settings.
+- **Photos tab.** Upload files or a whole folder to your gallery, and name one
+  folder to watch: new photos and videos in it are uploaded on their own while
+  Ledgerline is running. Removing the local copy afterwards is off by default.
+- **Pause syncing in the tray menu**, where you would look for it.
+
 - **The windows look like the web app.** Settings and sign-in are now drawn the
   same way the Ledgerline web app is, with the same colours, spacing and dark
   mode, instead of looking like a dialog from an older Windows. They need the

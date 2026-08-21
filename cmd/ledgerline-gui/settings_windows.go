@@ -64,6 +64,20 @@ func (s *settings) bindings() []deskui.Binding {
 		{Name: "loadAbout", Func: s.about},
 		{Name: "openPath", Func: s.openPath},
 		{Name: "openWebApp", Func: s.openWebApp},
+
+		// General tab.
+		{Name: "loadPrefs", Func: s.prefs},
+		{Name: "setPref", Func: s.setPref},
+		{Name: "addExclude", Func: s.addExclude},
+		{Name: "removeExclude", Func: s.removeExclude},
+		{Name: "pickCameraFolder", Func: s.pickCameraFolder},
+
+		// Photos tab.
+		{Name: "loadGallery", Func: s.gallery},
+		{Name: "pickPhotos", Func: s.pickPhotos},
+		{Name: "pickPhotoFolder", Func: s.pickPhotoFolder},
+		{Name: "sendPhotos", Func: s.sendPhotos},
+		{Name: "sendPhotoFolder", Func: s.sendPhotoFolder},
 	}
 }
 
@@ -386,12 +400,19 @@ func (s *settings) openPath(kind, target string) error {
 
 // openWebApp opens the signed-in server in the browser. The page has no idea
 // what the server is until the profile loads, so the target is resolved here.
-func (s *settings) openWebApp() error {
+func (s *settings) openWebApp(module string) error {
 	sess, err := session.Load()
 	if err != nil || strings.TrimSpace(sess.ServerURL) == "" {
 		return nil
 	}
-	openBrowserURL(sess.ServerURL)
+	url := strings.TrimSuffix(sess.ServerURL, "/")
+	// Only the module names this client knows: passing a path through from the
+	// page would make the button a way to open any URL.
+	switch module {
+	case "gallery", "files", "settings":
+		url += "/" + module
+	}
+	openBrowserURL(url)
 	return nil
 }
 

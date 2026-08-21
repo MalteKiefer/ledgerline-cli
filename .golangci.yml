@@ -98,6 +98,21 @@ linters:
         text: "G103|G115"
         linters:
           - gosec
+      # internal/deskpower asks Windows two questions — mains power, and whether
+      # the connection is metered — through a struct pointer and a COM vtable.
+      # Both are pointers to this program's own stack values; nothing here comes
+      # from outside the process.
+      - path: internal/deskpower/.*\.go
+        text: "G103|G115"
+        linters:
+          - gosec
+      # The clipboard is the one place a share link can go, and the Win32 API
+      # for it takes a locked global handle and a pointer to our own UTF-16
+      # buffer. Nothing crosses a trust boundary here.
+      - path: cmd/ledgerline-gui/clipboard_windows\.go
+        text: "G103"
+        linters:
+          - gosec
       # The sync engine opens files under the local directory the user named on
       # the command line; that is the whole point of a sync root. Same for the
       # chunked uploader (a path the caller passed) and the audit-log reader (a

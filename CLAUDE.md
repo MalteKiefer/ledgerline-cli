@@ -167,6 +167,9 @@ internal/webdavfs/      webdav.FileSystem over internal/api (the `files webdav` 
 internal/trayui/        tray menu model + avatar/brand icon rendering (platform-free, unit tested)
 internal/authflow/      the two sign-in routes (password+2FA, one-time code), shared by every front end
 internal/deskui/        the desktop windows: a WebView2 host plus the web app's own design tokens
+internal/deskprefs/     this computer's preferences (autostart, pause policy, exclusions, camera folder)
+internal/deskintegrate/ shell integration: the per-user Run key and the Explorer context menu
+internal/deskpower/     mains power and metered-connection questions, both fail-open
 internal/win32ui/       the one native dialog left: the shell folder chooser
 internal/syncrunner/    the sync loop both front ends run: intervals + fsnotify change detection
 internal/applog/        the desktop client's rotating log file
@@ -347,6 +350,14 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   propagation) would be a separate, carefully-reviewed feature. The configured
   pairs (§7) inherit exactly that behaviour: removing a pair removes the
   arrangement, never a file.
+- The desktop UI is still English only. The strings are in the page constants
+  rather than a catalogue, which is the next piece of work and the reason the
+  language preference exists but has nothing to switch yet: shipping a
+  half-translated window would be worse than shipping an English one.
+- Transfer caps are stored and shown but not yet enforced: throttling means a
+  rate-limited reader around every upload and download, which belongs in
+  `internal/api` rather than bolted onto the desktop. Stored now so the setting
+  and its plumbing land together rather than in two releases.
 - The windows need the Edge WebView2 runtime. It ships with Windows 11 and with
   any current Edge on Windows 10, so in practice it is there — but "in practice"
   is not "always", and a machine without it gets an explanatory error rather
@@ -408,6 +419,53 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   `docs/superpowers/plans/2026-08-11-plaintext-rewrite-gallery-files.md`.
 
 ## 10. Changelog
+
+- 2026-08-21 feat: **the desktop client grew the parts a desktop client has.**
+  Preferences, a shell context menu, and photo upload — measured against what
+  Proton Drive and Google Drive put in front of a user, and cut to what this
+  server can actually back.
+
+  **Preferences** (`internal/deskprefs`, a JSON file beside the session) are the
+  choices that belong to one computer: launch at login, pause syncing, do not
+  sync on battery or on a metered connection, transfer caps, the never-sync
+  list, the camera folder. Deliberately not on the server — one laptop's power
+  policy following the user to their desktop would be a bug, not a feature. The
+  one account setting on the same page is the file version cap, because that is
+  where a user looks for it; it needed a client for `/settings`, which the server
+  had and the Go client did not.
+
+  Every one of them is wired to something. `internal/syncrunner` gained a `Hold`
+  hook the tray fills from the preferences (`internal/deskpower` answers the
+  power and cost questions; both fail open, because a sync that stopped for an
+  unreadable battery flag is a bug you debug for an afternoon), and
+  `files.SyncOptions` gained `Skip`, so the exclusion list applies to the walk
+  rather than being a list nobody reads. A setting that does nothing is worse
+  than a setting that is missing.
+
+  **The Explorer menu** (`internal/deskintegrate`) is registry verbs under
+  HKCU, not a COM handler: no elevation, no DLL loaded into Explorer, and a
+  crash can only ever take down the process it launched. Each verb runs
+  `ledgerline-gui --context <verb> "<path>"` — a separate short-lived process,
+  chosen over routing to the running tray because a local IPC channel that can
+  make the tray upload, share or decrypt a file is a channel worth attacking.
+  Copy a share link, encrypt or decrypt with the account's keyring, upload,
+  add to the gallery, keep a folder in sync.
+
+  Encryption goes through the server's own keyring, the same one the web app's
+  Files module uses, so a file encrypted from Explorer opens in the browser. The
+  honest limit is stated rather than hidden: share, encrypt and decrypt need a
+  counterpart on the server, so outside a synced folder the window says so and
+  offers the upload instead of quietly uploading a plaintext copy first.
+
+  **Photos**: one watched folder, polled rather than fsnotify-watched, because
+  a card reader produces a create event long before the last byte and a poll
+  that only takes files whose size stopped changing cannot upload half a video.
+
+  Presentation: a monochrome line-icon set (`internal/deskui/icons_windows.go`)
+  drawn to match the web app's Material Symbols and emitted once as an SVG
+  sprite — hand-built rather than a font, because a page with `default-src
+  'none'` cannot fetch one and a 320 kB woff2 as a data URI to draw thirty
+  glyphs is a poor trade.
 
 - 2026-08-21 feat: **the desktop windows are WebView2 pages, not Win32 dialogs.**
   The hand-rolled toolkit (`internal/win32ui`: window, fields, buttons, list,

@@ -15,6 +15,8 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/applog"
 	"github.com/MalteKiefer/ledgerline-cli/internal/clientset"
+	"github.com/MalteKiefer/ledgerline-cli/internal/deskpower"
+	"github.com/MalteKiefer/ledgerline-cli/internal/deskprefs"
 	"github.com/MalteKiefer/ledgerline-cli/internal/files"
 	"github.com/MalteKiefer/ledgerline-cli/internal/syncconfig"
 	"github.com/MalteKiefer/ledgerline-cli/internal/syncrunner"
@@ -45,6 +47,7 @@ func syncPairs(ctx context.Context, pairs []syncconfig.Pair) string {
 			Direction:  p.Direction,
 			Conflict:   p.Conflict,
 			RemoteRoot: p.Remote,
+			Skip:       excludeFilter(),
 		}, &out, false)
 		cancel()
 		done()
@@ -109,7 +112,9 @@ func startSyncRunner(ctx context.Context, log *applog.Logger, onChange func()) {
 			return c, err
 		},
 		syncrunner.Options{
-			Log: func(format string, args ...any) { log.Printf(format, args...) },
+			Log:  func(format string, args ...any) { log.Printf(format, args...) },
+			Hold: syncHold,
+			Skip: excludeFilter(),
 			OnStart: func(p syncconfig.Pair) {
 				markRunning(p.ID)
 				onChange()
@@ -180,4 +185,44 @@ func pairLabel(p syncconfig.Pair) string {
 		arrow = "<-"
 	}
 	return local + " " + arrow + " " + remote
+}
+
+// syncHold is the tray's policy on when not to sync by itself: the user pressed
+// pause, the laptop is on battery, or the connection is metered.
+//
+// It reports the reason rather than a boolean so the log says why a folder sat
+// still. "Not syncing" without a reason is the kind of thing people debug for an
+// afternoon.
+//
+// A manual "Sync now" does not come through here. Pausing an explicit request
+// would be overriding the user rather than helping them.
+func syncHold() string {
+	p, err := deskprefs.Load()
+	if err != nil {
+		return "" // an unreadable preferences file must not stop syncing
+	}
+	switch {
+	case p.Paused:
+		return "syncing is paused"
+	case p.PauseOnBattery && deskpower.OnBattery():
+		return "on battery"
+	case p.PauseOnMetered && deskpower.Metered():
+		return "on a metered connection"
+	}
+	return ""
+}
+
+// excludeFilter is the "never sync these" list as a predicate.
+//
+// Read per call rather than captured once: the list is edited in the settings
+// window while the runner is running, and a filter that needed a restart to
+// notice would be a setting that looks broken.
+func excludeFilter() func(string) bool {
+	return func(name string) bool {
+		p, err := deskprefs.Load()
+		if err != nil {
+			return false
+		}
+		return p.Excluded(name)
+	}
 }

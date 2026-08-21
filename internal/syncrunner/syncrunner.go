@@ -59,6 +59,20 @@ type Options struct {
 	OnStart func(p syncconfig.Pair)
 	// OnResult, when set, is called after every run (the tray repaints from it).
 	OnResult func(p syncconfig.Pair, res files.SyncResult, err error)
+
+	// Hold, when set, is asked before every scheduled run. A non-empty answer
+	// is the reason to skip, which is logged once per reason rather than per
+	// pair; nil means never hold.
+	//
+	// This is where a desktop client's "pause syncing", "not on battery" and
+	// "not on metered connections" live. They are the caller's policy, not the
+	// runner's: the CLI's `sync service` deliberately has none of them, because
+	// a service somebody started explicitly should run.
+	Hold func() string
+
+	// Skip is passed through to every sync: names the caller never wants
+	// carried. Nil means the sync's own rules (hidden files) are the only ones.
+	Skip func(name string) bool
 }
 
 // Runner watches and syncs. Create with New and call Run.
@@ -85,7 +99,12 @@ func New(clientFn ClientFunc, opts Options) *Runner {
 		opts.Reload = DefaultReload
 	}
 	if opts.Sync == nil {
-		opts.Sync = realSync
+		// Bound to the caller's skip list here rather than inside realSync,
+		// which has no access to the options.
+		skip := opts.Skip
+		opts.Sync = func(ctx context.Context, c *api.Client, p syncconfig.Pair) (files.SyncResult, error) {
+			return syncPair(ctx, c, p, skip)
+		}
 	}
 	if opts.Log == nil {
 		opts.Log = func(string, ...any) {}
@@ -182,6 +201,10 @@ func (r *Runner) schedule(ctx context.Context, id string) {
 	r.timers[id] = time.AfterFunc(r.opts.Debounce, func() {
 		p, err := syncconfig.Get(id)
 		if err != nil || !p.Enabled {
+			return
+		}
+		if reason := r.held(); reason != "" {
+			r.opts.Log("change in %s, not syncing: %s", p.Local, reason)
 			return
 		}
 		r.opts.Log("change detected in %s", p.Local)
@@ -320,6 +343,9 @@ func (r *Runner) runPair(ctx context.Context, p syncconfig.Pair) {
 	if err != nil {
 		return // signed out: nothing to say, every pair would say the same
 	}
+	if reason := r.held(); reason != "" {
+		return // the caller's policy; the interval tick already logged it
+	}
 
 	if r.opts.OnStart != nil {
 		r.opts.OnStart(p)
@@ -345,11 +371,12 @@ func formatResult(res files.SyncResult) string {
 }
 
 // realSync is the production sync call.
-func realSync(ctx context.Context, c *api.Client, p syncconfig.Pair) (files.SyncResult, error) {
+func syncPair(ctx context.Context, c *api.Client, p syncconfig.Pair, skip func(string) bool) (files.SyncResult, error) {
 	return files.Sync(ctx, c, p.Local, files.SyncOptions{
 		Direction:  p.Direction,
 		Conflict:   p.Conflict,
 		RemoteRoot: p.Remote,
+		Skip:       skip,
 	}, discard{}, false)
 }
 
@@ -358,3 +385,13 @@ func realSync(ctx context.Context, c *api.Client, p syncconfig.Pair) (files.Sync
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// held asks the caller whether scheduled syncing should stand down, and returns
+// the reason. It is asked at the last moment rather than once per tick: a laptop
+// unplugged mid-loop should stop, not finish the round.
+func (r *Runner) held() string {
+	if r.opts.Hold == nil {
+		return ""
+	}
+	return r.opts.Hold()
+}
