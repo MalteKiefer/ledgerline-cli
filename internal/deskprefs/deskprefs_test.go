@@ -139,3 +139,24 @@ func TestUpdateAppliesOneChangeAndKeepsTheRest(t *testing.T) {
 		t.Fatalf("Update dropped unrelated settings: %+v", got)
 	}
 }
+
+// TestExcludedUnderstandsBothSeparators is the portability bug this shape
+// exists for: filepath.Base leaves a Windows path whole on Linux, because a
+// backslash is a legal character in a POSIX file name. The client reads
+// configuration written on Windows and syncs from Linux, so both conventions
+// have to match the same way on every platform.
+func TestExcludedUnderstandsBothSeparators(t *testing.T) {
+	p := Defaults()
+	for _, path := range []string{
+		`C:\deep\path\Thumbs.db`,
+		"/home/user/deep/Thumbs.db",
+		`mixed/path\Thumbs.db`,
+	} {
+		if !p.Excluded(path) {
+			t.Fatalf("Excluded(%q) = false", path)
+		}
+	}
+	if p.Excluded(`C:\work\notes.txt`) {
+		t.Fatal("a path with no matching base name was excluded")
+	}
+}

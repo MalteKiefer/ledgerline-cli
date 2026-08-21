@@ -244,11 +244,26 @@ func (p Prefs) normalised() Prefs {
 // The match is on the base name, not the path: a pattern like "*.tmp" is about
 // what a file is, and a user who writes it does not mean "only at the root".
 func (p Prefs) Excluded(name string) bool {
-	lower := strings.ToLower(filepath.Base(name))
+	lower := strings.ToLower(baseName(name))
 	for _, pattern := range p.Exclude {
 		if ok, err := filepath.Match(strings.ToLower(pattern), lower); err == nil && ok {
 			return true
 		}
 	}
 	return false
+}
+
+// baseName is the last path element, understanding both separators regardless of
+// the platform.
+//
+// filepath.Base would do on Windows and be wrong everywhere else: on Linux a
+// backslash is a legal character in a file name, so `filepath.Base` leaves
+// "C:\work\Thumbs.db" whole and the pattern never matches. This client reads
+// configuration written on Windows and syncs from Linux, so a path can arrive
+// in either convention no matter where the code is running.
+func baseName(path string) string {
+	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
