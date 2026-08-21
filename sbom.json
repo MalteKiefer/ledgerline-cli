@@ -4,7 +4,7 @@
   "specVersion": "1.6",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-20T22:08:41+02:00",
+    "timestamp": "2026-08-21T07:10:53+02:00",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -208,6 +208,55 @@
       }
     },
     {
+      "bom-ref": "pkg:golang/github.com/jchv/go-webview2@v0.0.0-20260205173254-56598839c808?type=module",
+      "type": "library",
+      "name": "github.com/jchv/go-webview2",
+      "version": "v0.0.0-20260205173254-56598839c808",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7ed9ec4ea2141f9ed740417e3e75d7f7efa79470b3764b81e736d6c8c32bb99a"
+        }
+      ],
+      "purl": "pkg:golang/github.com/jchv/go-webview2@v0.0.0-20260205173254-56598839c808?goarch=amd64\u0026goos=linux\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/jchv/go-webview2",
+          "type": "vcs"
+        }
+      ],
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "MIT"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "bom-ref": "pkg:golang/github.com/jchv/go-winloader@v0.0.0-20250406163304-c1995be93bd1?type=module",
+      "type": "library",
+      "name": "github.com/jchv/go-winloader",
+      "version": "v0.0.0-20250406163304-c1995be93bd1",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9e3b8b45c8c0b8c2abee42370fce405d6930ebffaff4fc2d57a33aa35d6c5874"
+        }
+      ],
+      "purl": "pkg:golang/github.com/jchv/go-winloader@v0.0.0-20250406163304-c1995be93bd1?goarch=amd64\u0026goos=linux\u0026type=module",
+      "externalReferences": [
+        {
+          "url": "https://github.com/jchv/go-winloader",
+          "type": "vcs"
+        }
+      ]
+    },
+    {
       "bom-ref": "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
       "type": "library",
       "name": "github.com/spf13/cobra",
@@ -370,6 +419,7 @@
       "dependsOn": [
         "pkg:golang/fyne.io/systray@v1.12.2?type=module",
         "pkg:golang/github.com/fsnotify/fsnotify@v1.9.0?type=module",
+        "pkg:golang/github.com/jchv/go-webview2@v0.0.0-20260205173254-56598839c808?type=module",
         "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",
         "pkg:golang/github.com/zalando/go-keyring@v0.2.8?type=module",
         "pkg:golang/golang.org/x/net@v0.58.0?type=module",
@@ -404,6 +454,19 @@
     },
     {
       "ref": "pkg:golang/github.com/inconshreveable/mousetrap@v1.1.0?type=module"
+    },
+    {
+      "ref": "pkg:golang/github.com/jchv/go-webview2@v0.0.0-20260205173254-56598839c808?type=module",
+      "dependsOn": [
+        "pkg:golang/github.com/jchv/go-winloader@v0.0.0-20250406163304-c1995be93bd1?type=module",
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
+    },
+    {
+      "ref": "pkg:golang/github.com/jchv/go-winloader@v0.0.0-20250406163304-c1995be93bd1?type=module",
+      "dependsOn": [
+        "pkg:golang/golang.org/x/sys@v0.47.0?type=module"
+      ]
     },
     {
       "ref": "pkg:golang/github.com/spf13/cobra@v1.10.2?type=module",

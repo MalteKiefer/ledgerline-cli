@@ -38,9 +38,17 @@ ICON := packaging/windows/ledgerline.ico
 
 # Numeric version parts for the Windows VERSIONINFO resource, which only accepts
 # integers: 0.7.4-66-gabc1234 becomes 0.7.4.66.
-VER_MAJOR := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f1)
-VER_MINOR := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f2)
-VER_PATCH := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f3)
+# Every part defaults to 0: a checkout with no tags in reach describes as a bare
+# commit hash, which parses to nothing, and goversioninfo then reads the next
+# flag as the value of the missing one, and reports the next flag name as an
+# invalid value. A version resource of 0.0.0.0 is wrong but harmless; a build
+# that dies on a shallow clone is not.
+VER_MAJOR_RAW := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f1)
+VER_MINOR_RAW := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f2)
+VER_PATCH_RAW := $(shell echo $(VERSION) | sed 's/[^0-9.].*//' | cut -d. -f3)
+VER_MAJOR := $(if $(VER_MAJOR_RAW),$(VER_MAJOR_RAW),0)
+VER_MINOR := $(if $(VER_MINOR_RAW),$(VER_MINOR_RAW),0)
+VER_PATCH := $(if $(VER_PATCH_RAW),$(VER_PATCH_RAW),0)
 VER_BUILD_RAW := $(shell echo $(VERSION) | sed -n 's/^[0-9.]*-\([0-9]*\)-.*/\1/p')
 VER_BUILD := $(if $(VER_BUILD_RAW),$(VER_BUILD_RAW),0)
 
