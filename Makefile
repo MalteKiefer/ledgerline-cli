@@ -104,6 +104,14 @@ build:
 install:
 	CGO_ENABLED=0 go install -trimpath -ldflags "$(LDFLAGS)" .
 
+# install-windows-local replaces the installed programs with the ones in ./bin,
+# for testing a change on the machine that built it without stepping through the
+# installer. The work is in a PowerShell script rather than inline here because
+# the elevation and the quoting are unreadable as a make recipe.
+.PHONY: install-windows-local
+install-windows-local:
+	powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/install-local.ps1
+
 .PHONY: release
 release: resources
 	@mkdir -p dist

@@ -49,10 +49,11 @@ func runContextVerb(log *applog.Logger, req contextRequest) {
 	c := &contextWindow{log: log, req: req}
 	if err := deskui.Run(deskui.Options{
 		Title:    "Ledgerline",
-		Width:    560,
-		Height:   440,
-		Body:     contextBody,
-		Script:   contextScript,
+		Width:    600,
+		Height:   520,
+		Theme:    windowTheme(),
+		Body:     contextBody + remoteBrowserBody,
+		Script:   remoteBrowserScript + contextScript,
 		Bindings: c.bindings(),
 	}); err != nil && log != nil {
 		log.Printf("context window (%s): %v", req.Verb, err)
@@ -69,7 +70,8 @@ func (c *contextWindow) bindings() []deskui.Binding {
 		{Name: "describe", Func: c.describe},
 		{Name: "runVerb", Func: c.run},
 		{Name: "loadKeyring", Func: c.keyring},
-		{Name: "remoteFolderList", Func: remoteFolders},
+		{Name: "remoteTree", Func: func() (remoteTree, error) { return loadRemoteTree() }},
+		{Name: "createRemoteFolder", Func: createRemoteFolderIn},
 		{Name: "copyText", Func: copyToClipboard},
 		{Name: "openPath", Func: func(kind, target string) error {
 			switch kind {

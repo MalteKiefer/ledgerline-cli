@@ -33,6 +33,7 @@ func runLoginDialog(defaultServer string) (session.Session, bool, string) {
 		Title:  "Sign in to Ledgerline",
 		Width:  520,
 		Height: 560,
+		Theme:  windowTheme(),
 		Body:   loginBody,
 		Script: loginScript,
 		Bindings: []deskui.Binding{

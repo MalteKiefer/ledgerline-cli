@@ -113,9 +113,12 @@ func (s *settings) setPref(key string, value string) (string, error) {
 			return errText(err), nil
 		}
 		// The shell menu's labels are strings in the registry, so they only
-		// follow a language change if they are rewritten.
+		// follow a language change if they are rewritten — and that write needs
+		// an administrator. Saying so beats a consent prompt nobody asked for by
+		// changing the language.
 		if deskintegrate.ExplorerMenuRegistered() {
-			_ = s.applyExplorerMenu(true)
+			return "Language changed. The Explorer menu keeps its old labels until " +
+				"you switch it off and on again, which asks for administrator rights.", nil
 		}
 		return "", nil
 
@@ -162,14 +165,25 @@ func (s *settings) setPref(key string, value string) (string, error) {
 	return "Unknown setting: " + key, nil
 }
 
-// applyExplorerMenu registers or removes the shell menu in the current UI
-// language.
+// applyExplorerMenu registers or removes the shell menu.
+//
+// The registration is machine-wide, so it needs an administrator. Rather than
+// failing with an access-denied message the user can do nothing about, the tray
+// re-runs the CLI's shell-menu command elevated: one consent prompt at the
+// moment somebody flips the switch, and none at any other time.
 func (s *settings) applyExplorerMenu(on bool) error {
-	if !on {
-		return deskintegrate.UnregisterExplorerMenu()
+	verb := "remove"
+	if on {
+		verb = "install"
 	}
-	files, dirs := explorerMenus()
-	return deskintegrate.RegisterExplorerMenu(files, dirs)
+	if deskintegrate.Elevated() {
+		if !on {
+			return deskintegrate.UnregisterExplorerMenu()
+		}
+		files, dirs := deskintegrate.DefaultMenus()
+		return deskintegrate.RegisterExplorerMenu(files, dirs)
+	}
+	return runElevated("shell-menu", verb)
 }
 
 // setMaxVersions changes the account's version cap on the server.

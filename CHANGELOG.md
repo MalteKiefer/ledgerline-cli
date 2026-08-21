@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A real browser for picking a folder on the server.** Adding a synced folder,
+  or uploading from the right-click menu, used to show every folder path in one
+  flat list — readable with six folders, useless with two hundred. It is now a
+  browser: a breadcrumb, double-click to go in, one level up, and a button to
+  make a folder where you are. The files are listed too, greyed out, so you can
+  tell whether you are in the right place.
+- **Dark mode as a choice.** Settings → General has Light, Dark and "Follow
+  Windows". A window picks up the choice when it opens, so a window already on
+  screen keeps the palette it started with.
+
 - **Settings that a desktop client should have.** A General tab with: start
   Ledgerline when you sign in, pause syncing (it stays paused after a restart),
   don't sync on battery or on a metered connection, transfer limits, how many

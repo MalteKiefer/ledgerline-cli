@@ -21,9 +21,20 @@ import (
 // a separate process. The cost is that our entries live in the "Show more
 // options" menu on Windows 11 rather than the short one.
 const (
-	// classesKey is the per-user class registration root. HKCU\Software\Classes
-	// is merged over HKLM for this user, so this needs no administrator.
-	classesKey = `Software\Classes`
+	// classesKey is the machine-wide class registration root.
+	//
+	// HKLM, not the per-user class root, and that is measured rather than
+	// preferred. The first version wrote per-user — documented to merge over
+	// HKLM, and needing no elevation — and nothing appeared in the menu. Two
+	// byte-identical verbs under Directory settled it: same default-value label,
+	// same command subkey, the exact shape of the "Open Git GUI here" entry that
+	// does work on the same machine. The HKLM one renders, the per-user one does
+	// not, and that machine carried no third-party verb in the per-user class
+	// root either.
+	//
+	// So registering needs an administrator and belongs to install time: a UAC
+	// prompt on every sign-in would be worse than no menu at all.
+	classesKey = `SOFTWARE\Classes`
 
 	// menuName is the key name under each class's shell key.
 	menuName = "Ledgerline"
@@ -59,6 +70,9 @@ type Menu struct {
 // the supported way to relabel: the shell reads these strings, so they are
 // written in the user's language rather than resolved at display time.
 func RegisterExplorerMenu(files, dirs Menu) error {
+	if !Elevated() {
+		return ErrNeedsElevation
+	}
 	exe, err := trayExecutable()
 	if err != nil {
 		return err
@@ -80,6 +94,9 @@ func RegisterExplorerMenu(files, dirs Menu) error {
 // "not found": the point is to end up with the menu absent, and a partially
 // registered state must still clean up completely.
 func UnregisterExplorerMenu() error {
+	if !Elevated() {
+		return ErrNeedsElevation
+	}
 	var firstErr error
 	note := func(err error) {
 		if err != nil && !isNotFound(err) && firstErr == nil {
@@ -97,7 +114,7 @@ func UnregisterExplorerMenu() error {
 
 // ExplorerMenuRegistered reports whether the file menu is present.
 func ExplorerMenuRegistered() bool {
-	k, err := registry.OpenKey(registry.CURRENT_USER,
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
 		classesKey+`\*\shell\`+menuName, registry.QUERY_VALUE)
 	if err != nil {
 		return false
@@ -112,12 +129,19 @@ func ExplorerMenuRegistered() bool {
 // clicked, %V for the folder whose background was clicked.
 func writeMenu(class, store string, menu Menu, exe, argument string) error {
 	root := classesKey + `\` + class + `\shell\` + menuName
-	k, _, err := registry.CreateKey(registry.CURRENT_USER, root, registry.SET_VALUE)
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, root, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", root, err)
 	}
 	defer k.Close()
 
+	// The label goes in both places. MUIVerb is the documented one, but every
+	// entry that actually renders on a real machine — Git's, the shell's own —
+	// carries it in the key's default value, and an entry with an empty default
+	// and only a MUIVerb drew nothing at all.
+	if err := k.SetStringValue("", menu.Title); err != nil {
+		return err
+	}
 	if err := k.SetStringValue("MUIVerb", menu.Title); err != nil {
 		return err
 	}
@@ -151,22 +175,26 @@ func writeVerb(store string, v Verb, exe, argument string) error {
 	name := fmt.Sprintf("%02d%s", v.Order, v.Name)
 	path := classesKey + `\` + store + `\shell\` + name
 
-	k, _, err := registry.CreateKey(registry.CURRENT_USER, path, registry.SET_VALUE)
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
 	}
 	defer k.Close()
 
+	if err := k.SetStringValue("", v.Label); err != nil {
+		return err
+	}
 	if err := k.SetStringValue("MUIVerb", v.Label); err != nil {
 		return err
 	}
 	if v.Separator {
-		if err := k.SetStringValue("CommandFlags", "0x20"); err != nil { // ECF_SEPARATORBEFORE
+		// A DWORD, not a string: the shell reads this as a numeric flag field.
+		if err := k.SetDWordValue("CommandFlags", 0x20); err != nil { // ECF_SEPARATORBEFORE
 			return err
 		}
 	}
 
-	cmd, _, err := registry.CreateKey(registry.CURRENT_USER, path+`\command`, registry.SET_VALUE)
+	cmd, _, err := registry.CreateKey(registry.LOCAL_MACHINE, path+`\command`, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
@@ -183,7 +211,7 @@ func writeVerb(store string, v Verb, exe, argument string) error {
 // deleteTree removes a key and everything under it. The registry API deletes
 // only empty keys, so the children go first.
 func deleteTree(path string) error {
-	k, err := registry.OpenKey(registry.CURRENT_USER, path, registry.READ|registry.WRITE)
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.READ|registry.WRITE)
 	if err != nil {
 		return err
 	}
@@ -197,7 +225,7 @@ func deleteTree(path string) error {
 			return err
 		}
 	}
-	return registry.DeleteKey(registry.CURRENT_USER, path)
+	return registry.DeleteKey(registry.LOCAL_MACHINE, path)
 }
 
 // isNotFound reports the registry's "no such key or value", which every removal
@@ -219,4 +247,26 @@ func isNotFound(err error) bool {
 		return errno == syscall.ERROR_FILE_NOT_FOUND || errno == syscall.ERROR_PATH_NOT_FOUND
 	}
 	return false
+}
+
+// ErrNeedsElevation says the caller has to be running as administrator. It is a
+// distinct error so the settings window can offer to re-launch rather than show
+// an access-denied message the user can do nothing about.
+var ErrNeedsElevation = errors.New("registering the Explorer menu needs administrator rights")
+
+// Elevated reports whether this process can write to the machine-wide class
+// root.
+//
+// Asked by trying rather than by inspecting the process token: what matters is
+// whether the write will succeed, and a token check would still have to guess
+// about policy and registry virtualisation.
+func Elevated() bool {
+	const probe = classesKey + `\Ledgerline.ElevationProbe`
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, probe, registry.SET_VALUE)
+	if err != nil {
+		return false
+	}
+	k.Close()
+	_ = registry.DeleteKey(registry.LOCAL_MACHINE, probe)
+	return true
 }

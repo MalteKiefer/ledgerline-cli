@@ -31,7 +31,6 @@ const contextBody = `
           <input id="folder" type="text" spellcheck="false" placeholder="(top level)"></label>
         <button onclick="browseRemote()">Browse…</button>
       </div>
-      <div class="list" id="remote-list" hidden></div>
     </div>
 
     <!-- Encryption: one of your keys signs, any number of recipients can open. -->
@@ -152,22 +151,7 @@ function loadKeys() {
 /* --------------------------------------------------- remote folder ------- */
 
 function browseRemote() {
-  const box = $('remote-list');
-  box.hidden = false;
-  box.innerHTML = '<div class="empty"><span class="spin"></span>Loading…</div>';
-  remoteFolderList().then(list => {
-    const rows = ['(top level)'].concat(list || []);
-    box.innerHTML = rows.map((r, i) =>
-      '<div class="item" onclick="takeFolder(' + i + ')"><div class="grow"><div class="path">' +
-      esc(r) + '</div></div></div>').join('');
-    window.__rows = rows;
-  }).catch(e => { box.innerHTML = '<div class="empty">' + esc(e) + '</div>'; });
-}
-
-function takeFolder(i) {
-  const rows = window.__rows || [];
-  $('folder').value = i === 0 ? '' : (rows[i] || '');
-  $('remote-list').hidden = true;
+  rbOpen($('folder').value, path => { $('folder').value = path; });
 }
 
 /* -------------------------------------------------------------- run ------ */

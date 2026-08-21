@@ -37,10 +37,23 @@ type Binding struct {
 }
 
 // Options describe one window.
+// Theme is the palette the window should use.
+type Theme string
+
+const (
+	// ThemeSystem follows the Windows app-mode preference.
+	ThemeSystem Theme = "system"
+	ThemeLight  Theme = "light"
+	ThemeDark   Theme = "dark"
+)
+
 type Options struct {
 	Title  string
 	Width  int
 	Height int
+
+	// Theme overrides the system preference. Empty means follow it.
+	Theme Theme
 
 	// Body is the page's markup: everything that goes inside <body>.
 	Body string
@@ -91,7 +104,7 @@ func Run(opts Options) error {
 		}
 	}
 
-	decorate(handle)
+	decorate(handle, opts.Theme)
 	w.SetHtml(page(opts))
 	w.Run()
 	return nil
@@ -102,7 +115,7 @@ func Run(opts Options) error {
 // thing to escape.
 func page(opts Options) string {
 	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8">`)
+	b.WriteString(`<!doctype html><html lang="en"` + themeClass(opts.Theme) + `><head><meta charset="utf-8">`)
 	b.WriteString(`<meta http-equiv="Content-Security-Policy" content="`)
 	// Nothing loads from anywhere: the only script is the one embedded below,
 	// and the only images are the data: URIs the Go side passes in. A page that
@@ -149,14 +162,14 @@ const (
 //
 // The page inside styles itself; the frame around it is the window manager's,
 // and it has to be asked.
-func decorate(handle unsafe.Pointer) {
+func decorate(handle unsafe.Pointer, theme Theme) {
 	if handle == nil {
 		return
 	}
 	hwnd := windows.Handle(uintptr(handle))
 
 	var dark int32
-	if darkMode() {
+	if dark_ := wantDark(theme); dark_ {
 		dark = 1
 	}
 	for _, attr := range []uintptr{dwmDarkMode, dwmDarkModePre} {
@@ -179,4 +192,32 @@ func postClose(handle unsafe.Pointer) {
 		return
 	}
 	_, _, _ = procPostMessage.Call(uintptr(handle), wmClose, 0, 0)
+}
+
+// themeClass is the class attribute for the document root.
+//
+// The stylesheet reads it: an explicit choice has to beat prefers-color-scheme,
+// and a class is the only thing a page can be given from outside that CSS can
+// then take priority from.
+func themeClass(theme Theme) string {
+	switch theme {
+	case ThemeLight:
+		return ` class="light"`
+	case ThemeDark:
+		return ` class="dark"`
+	}
+	return ""
+}
+
+// wantDark decides how the title bar should be shaded. The frame is the window
+// manager's, so it has to be told separately from the page — a light page in a
+// dark frame is the kind of seam people notice immediately.
+func wantDark(theme Theme) bool {
+	switch theme {
+	case ThemeLight:
+		return false
+	case ThemeDark:
+		return true
+	}
+	return darkMode()
 }

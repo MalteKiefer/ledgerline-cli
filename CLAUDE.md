@@ -442,14 +442,37 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   rather than being a list nobody reads. A setting that does nothing is worse
   than a setting that is missing.
 
-  **The Explorer menu** (`internal/deskintegrate`) is registry verbs under
-  HKCU, not a COM handler: no elevation, no DLL loaded into Explorer, and a
-  crash can only ever take down the process it launched. Each verb runs
+  **The Explorer menu** (`internal/deskintegrate`) is registry verbs, not a COM
+  handler: no DLL loaded into Explorer, and a crash can only ever take down the
+  process it launched. Each verb runs
   `ledgerline-gui --context <verb> "<path>"` — a separate short-lived process,
   chosen over routing to the running tray because a local IPC channel that can
   make the tray upload, share or decrypt a file is a channel worth attacking.
   Copy a share link, encrypt or decrypt with the account's keyring, upload,
   add to the gallery, keep a folder in sync.
+
+  They live under **HKLM**\SOFTWARE\Classes, which costs an elevation prompt and
+  was not the first choice. Per-user verbs under HKCU were written correctly —
+  `ExtendedSubCommandsKey` cascade, label in the key's default value, a `Position`
+  and an `Icon` — and Explorer did not draw them on the test machine, while a
+  byte-identical registration under HKLM appeared immediately. That was measured
+  with a pair of otherwise identical probe keys, not inferred, after three
+  rounds of guessing at the shape (the label in `MUIVerb` alone is not enough,
+  `CommandFlags` must be a DWORD, and Windows' own cascades do not set
+  `SubCommands`). The installer registers it as administrator; the switch in
+  Settings re-runs `ledgerline-cli shell-menu install` elevated, so a consent
+  prompt appears exactly when somebody flips the switch and never otherwise.
+
+  Two bugs on the way there are worth remembering, because both were invisible
+  in English. `isNotFound` compared `err.Error()` against `"cannot find"`, and on
+  a German Windows the message is "Das System kann die angegebene Datei nicht
+  finden" — so clearing a store that did not exist yet read as a failure and
+  registration stopped after writing the parent key. It matches error *codes*
+  now, and the test asserts on codes so it fails for the old implementation even
+  on an English runner. The same comparison was wrong in the autostart removal.
+  And in PowerShell, `*` in a registry path is a wildcard: reading
+  `HKEY_CLASSES_ROOT\*\shell\...` without `-LiteralPath` silently returns
+  nothing, which cost one wrong conclusion about a key that was there all along.
 
   Encryption goes through the server's own keyring, the same one the web app's
   Files module uses, so a file encrypted from Explorer opens in the browser. The
@@ -488,6 +511,26 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   really was an image; every outward jump (Explorer, the browser) goes through a
   binding that decides what a safe target is. What the page can do is exactly
   the set of functions bound to it.
+
+  **Picking a folder on the server is a browser, not a list.** The first version
+  listed every folder path at once, which is a thing you read rather than a place
+  you move through. `remotebrowser_windows.go` is one implementation shared by
+  both windows — the pair editor and the Explorer verb — so the two cannot drift:
+  breadcrumb, double-click to enter, up, new folder, and the files shown greyed
+  out and unselectable, because a dialog that returns a folder should not offer
+  rows that look clickable and are not. The whole tree arrives in one call
+  (`remotetree_windows.go`) and navigation happens in the page: the files listing
+  is the only endpoint there is — there is no "children of this folder" call — so
+  a request per click would fetch everything on every click anyway.
+
+  **Dark mode** is a stored preference, not only a system follow. The stylesheet
+  carries three blocks: the light palette on `:root`, the dark one under
+  `prefers-color-scheme: dark` guarded by `:root:not(.light)`, and the dark one
+  again on `:root.dark`, so an explicit choice beats the system in both
+  directions. Every window reads the preference as it opens rather than
+  capturing it once, which means changing the setting shows in the next window
+  and not in the one already on screen — the honest limit of not re-rendering a
+  live page.
 
   Two things moved out of the tray menu while the window existed to hold them:
   the **avatar** and the **storage figures**, now a two-tone bar with the files

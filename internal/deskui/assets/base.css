@@ -24,8 +24,38 @@
   --radius-sm: 0.625rem;
 }
 
+/* Three blocks, in this order, so all three states work:
+
+   1. :root            — the light palette, always defined.
+   2. prefers-dark     — the system default, unless the user chose light.
+   3. .dark            — an explicit choice, which wins over both.
+
+   Defining dark only inside the media query would make "Dark" unreachable on a
+   machine set to light, which is the setting people actually reach for. */
+:root.dark {
+  --ll-bg: #0f0e17;
+  --ll-surface: #17161f;
+  --ll-elevated: #1d1c28;
+  --ll-border: #2a2937;
+  --ll-muted: #9a97ad;
+  --ll-fg: #ecebf5;
+
+  --ll-primary: #9575ff;
+  --ll-primary-hover: #b3a1ff;
+  --ll-primary-fg: #17161f;
+  --ll-primary-soft: #221d3d;
+
+  --ll-danger: #ff8095;
+  --ll-danger-soft: #2c1a20;
+  --ll-ok: #6ddba4;
+
+  color-scheme: dark;
+}
+
+:root.light { color-scheme: light; }
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light) {
     --ll-bg: #0f0e17;
     --ll-surface: #17161f;
     --ll-elevated: #1d1c28;
@@ -305,7 +335,9 @@ label.check input { accent-color: var(--ll-primary); width: 16px; height: 16px; 
   background: color-mix(in srgb, #000 45%, transparent);
   display: grid;
   place-items: center;
-  padding: 24px;
+  /* The inset shrinks with the window: 24px is a frame in the settings window
+     and a waste of a third of the height in the small context window. */
+  padding: clamp(10px, 3vh, 24px);
 }
 .scrim[hidden] { display: none; }
 
@@ -437,3 +469,60 @@ button:has(.ic:only-child) { padding: 8px; min-width: 34px; }
 }
 .chip button:hover { background: color-mix(in srgb, var(--ll-muted) 18%, transparent); color: var(--ll-fg); }
 .chip .ic { width: 12px; height: 12px; stroke-width: 2.25; vertical-align: 0; }
+
+/* ------------------------------------------------------- folder browser -- */
+
+/* The browser fills the window it opens in, up to a size past which a folder
+   listing gains nothing from being larger. Two windows of very different sizes
+   share it — 820x660 for Settings, 560x460 for the context verb — so a fixed
+   box was either cramped in one or floating in the middle of the other. */
+.modal.browser {
+  width: 100%;
+  max-width: 720px;
+  height: 100%;
+  max-height: 660px;
+}
+/* Only the listing scrolls: the breadcrumb, the toolbar and the footer keep
+   their height so the chosen path and the buttons never scroll out of reach. */
+.modal.browser > header,
+.modal.browser > .toolbar,
+.modal.browser > footer { flex: none; }
+.modal.browser .content { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.modal.browser .list { flex: 1; max-height: none; min-height: 0; }
+.modal.browser .status:empty { display: none; }
+
+/* The breadcrumb. Every ancestor is a button, which is what separates a browser
+   from a label showing where you happen to be. */
+.crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin-top: 6px; }
+.crumb {
+  all: unset;
+  cursor: pointer;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--ll-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.crumb:hover { background: color-mix(in srgb, var(--ll-muted) 14%, transparent); color: var(--ll-fg); }
+.crumb:last-of-type { color: var(--ll-fg); }
+.crumbs .sep { opacity: .5; }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px 0;
+}
+
+.modal.browser footer { align-items: center; }
+.modal.browser .here {
+  color: var(--ll-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* A file is context, not a choice: no hover affordance, no pointer. */
+.item.file { cursor: default; }
+.item.file:hover { background: transparent; }
+.item.file .path { color: var(--ll-muted); }

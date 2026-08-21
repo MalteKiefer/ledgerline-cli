@@ -150,18 +150,11 @@ here or on the server, and deletions are never propagated either way.</p>
   </div>
 </div>
 
-<!-- ------------------------------------------------------ remote picker -- -->
-<div class="scrim" id="remote-scrim" hidden>
-  <div class="modal">
-    <header><h1>Choose a folder on the server</h1></header>
-    <div class="content">
-      <div class="list" id="remote-list"><div class="empty">Loading…</div></div>
-    </div>
-    <footer><button onclick="closeRemote()">Cancel</button></footer>
-  </div>
-</div>`
+` + remoteBrowserBody + `
 
-const settingsScript = generalScript + galleryScript + `
+`
+
+const settingsScript = generalScript + galleryScript + remoteBrowserScript + `
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -356,24 +349,8 @@ function savePairForm() {
 /* ------------------------------------------------------ remote picker ---- */
 
 function chooseRemote() {
-  $('remote-scrim').hidden = false;
-  $('remote-list').innerHTML = '<div class="empty"><span class="spin"></span>Loading…</div>';
-  remoteFolderList().then(list => {
-    const rows = ['(top level)'].concat(list || []);
-    $('remote-list').innerHTML = rows.map((r, i) =>
-      '<div class="item" onclick="takeRemote(' + i + ')"><div class="grow"><div class="path">' +
-      esc(r) + '</div></div></div>').join('');
-    window.__remote = rows;
-  }).catch(e => { $('remote-list').innerHTML = '<div class="empty">' + esc(e) + '</div>'; });
+  rbOpen($('e-remote').value, path => { $('e-remote').value = path; });
 }
-
-function takeRemote(i) {
-  const rows = window.__remote || [];
-  $('e-remote').value = i === 0 ? '' : (rows[i] || '');
-  closeRemote();
-}
-
-function closeRemote() { $('remote-scrim').hidden = true; }
 
 /* ------------------------------------------------------------ about ------ */
 

@@ -25,7 +25,6 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/api"
 	"github.com/MalteKiefer/ledgerline-cli/internal/applog"
 	"github.com/MalteKiefer/ledgerline-cli/internal/clientset"
-	"github.com/MalteKiefer/ledgerline-cli/internal/deskintegrate"
 	"github.com/MalteKiefer/ledgerline-cli/internal/deskprefs"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/trayui"
@@ -157,10 +156,8 @@ func (a *app) onReady() {
 	startSyncRunner(context.Background(), a.log, a.syncChanged)
 	startCameraWatcher(context.Background(), a.log, a.syncChanged)
 
-	// The shell menu is registered from here rather than by the installer, so it
-	// follows the preference and the chosen language. Doing it at startup also
-	// repairs a registration another tool removed.
-	a.applyExplorerMenu()
+	// The menu label depends on the stored preference, so it is painted once here.
+	a.paintPauseFromPrefs()
 
 	go a.loop()
 }
@@ -509,27 +506,16 @@ func (a *app) paintPause(paused bool) {
 	a.pause.SetTooltip("Stop syncing on a schedule until turned back on")
 }
 
-// applyExplorerMenu brings the shell registration in line with the preference.
+// paintPauseFromPrefs labels the pause item from the stored preference.
 //
-// Failure is logged and otherwise ignored: a context menu that could not be
-// registered is a missing convenience, not a reason to refuse to run.
-func (a *app) applyExplorerMenu() {
+// The Explorer menu is deliberately not touched here. Registering it is a
+// machine-wide write that needs an administrator, so it belongs to the installer
+// and to the switch in Settings — asking for consent every time the tray starts
+// would train people to click through UAC prompts.
+func (a *app) paintPauseFromPrefs() {
 	p, err := deskprefs.Load()
 	if err != nil {
 		return
 	}
 	a.paintPause(p.Paused)
-
-	if !p.ExplorerMenu {
-		if deskintegrate.ExplorerMenuRegistered() {
-			if err := deskintegrate.UnregisterExplorerMenu(); err != nil {
-				a.log.Printf("could not remove the Explorer menu: %v", err)
-			}
-		}
-		return
-	}
-	files, dirs := explorerMenus()
-	if err := deskintegrate.RegisterExplorerMenu(files, dirs); err != nil {
-		a.log.Printf("could not register the Explorer menu: %v", err)
-	}
 }

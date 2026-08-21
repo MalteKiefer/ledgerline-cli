@@ -90,5 +90,7 @@ func NewRootCommand() *cobra.Command {
 		newSyncCommand(),
 		newAuditCommand(),
 	)
+	// Shell integration is Windows-only; on other platforms this adds nothing.
+	root.AddCommand(platformCommands()...)
 	return root
 }

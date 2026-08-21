@@ -142,15 +142,33 @@ Section /o "Start the tray icon at sign-in" SecAutostart
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APPNAME}" '"$INSTDIR\ledgerline-gui.exe"'
 SectionEnd
 
+; The Explorer right-click menu is machine-wide registry verbs under
+; HKLM\SOFTWARE\Classes, so it can only be written by an administrator. The
+; installer already runs as one, which is why it is registered here rather than
+; on first launch: doing it later would mean a consent prompt at a moment the
+; user did not ask for one.
+;
+; Per-user verbs under HKCU were tried first and Explorer did not render them on
+; a test machine, so machine-wide it is; the same shape Git uses.
+Section "Explorer right-click menu" SecShellMenu
+  nsExec::ExecToLog '"$INSTDIR\ledgerline-cli.exe" shell-menu install'
+SectionEnd
+
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "The ledgerline-cli command and the ledgerline-gui tray icon."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "Shortcuts for the tray icon, a CLI shell and the uninstaller."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Make ledgerline-cli runnable from any terminal."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecAutostart} "Run the tray icon automatically when you sign in."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecShellMenu} "Add share, encrypt, upload and sync to the right-click menu for files and folders."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
-  ; Stop the tray first: an open handle on the .exe would leave it behind.
+  ; The shell menu goes before the files: removing it needs the CLI that is
+  ; about to be deleted, and a leftover verb would point at a program that no
+  ; longer exists.
+  nsExec::ExecToLog '"$INSTDIR\ledgerline-cli.exe" shell-menu remove'
+
+  ; Stop the tray next: an open handle on the .exe would leave it behind.
   nsExec::Exec 'taskkill /IM ledgerline-gui.exe /F'
 
   Delete "$INSTDIR\ledgerline-cli.exe"

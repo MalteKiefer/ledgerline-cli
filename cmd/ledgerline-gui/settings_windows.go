@@ -17,6 +17,7 @@ import (
 	"github.com/MalteKiefer/ledgerline-cli/internal/applog"
 	"github.com/MalteKiefer/ledgerline-cli/internal/clientset"
 	"github.com/MalteKiefer/ledgerline-cli/internal/config"
+	"github.com/MalteKiefer/ledgerline-cli/internal/deskprefs"
 	"github.com/MalteKiefer/ledgerline-cli/internal/deskui"
 	"github.com/MalteKiefer/ledgerline-cli/internal/session"
 	"github.com/MalteKiefer/ledgerline-cli/internal/syncconfig"
@@ -37,6 +38,7 @@ func runSettingsWindow(log *applog.Logger, onSignOut func()) {
 		Title:    "Ledgerline settings",
 		Width:    820,
 		Height:   660,
+		Theme:    windowTheme(),
 		Body:     settingsBody,
 		Script:   settingsScript,
 		Bindings: s.bindings(),
@@ -74,6 +76,8 @@ func (s *settings) bindings() []deskui.Binding {
 
 		// Photos tab.
 		{Name: "loadGallery", Func: s.gallery},
+		{Name: "remoteTree", Func: s.remoteTree},
+		{Name: "createRemoteFolder", Func: s.createRemoteFolder},
 		{Name: "pickPhotos", Func: s.pickPhotos},
 		{Name: "pickPhotoFolder", Func: s.pickPhotoFolder},
 		{Name: "sendPhotos", Func: s.sendPhotos},
@@ -493,4 +497,28 @@ func executablePath() (string, error) {
 		return resolved, nil
 	}
 	return exe, nil
+}
+
+// statFile is os.Stat, wrapped so callers in this package do not each import os
+// for one call.
+func statFile(path string) (os.FileInfo, error) { return os.Stat(path) }
+
+// windowTheme is the palette every window opens with.
+//
+// Read per window rather than captured once: changing the setting and opening a
+// window should show the new theme without restarting the tray. A window already
+// on screen keeps the palette it opened with, which is the honest limit of not
+// re-rendering a live page.
+func windowTheme() deskui.Theme {
+	p, err := deskprefs.Load()
+	if err != nil {
+		return deskui.ThemeSystem
+	}
+	switch p.Theme {
+	case deskprefs.ThemeLight:
+		return deskui.ThemeLight
+	case deskprefs.ThemeDark:
+		return deskui.ThemeDark
+	}
+	return deskui.ThemeSystem
 }
