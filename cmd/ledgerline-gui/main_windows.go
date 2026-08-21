@@ -39,11 +39,10 @@ const refreshInterval = 5 * time.Minute
 // requestTimeout bounds one refresh so a hung server cannot wedge the menu.
 const requestTimeout = 20 * time.Second
 
-// detailSlots is how many rows each submenu reserves. systray cannot remove an
-// item once added, so the renderer fills fixed slots and hides the rest.
-// Account needs e-mail, server, files, gallery and total; sync needs one per
-// folder pair, and five is more folders than a tray menu should list before the
-// window is the better answer.
+// detailSlots is how many rows the sync submenu reserves. systray cannot remove
+// an item once added, so the renderer fills fixed slots and hides the rest.
+// Five is more folders than a tray menu should list before the window is the
+// better answer.
 const detailSlots = 5
 
 func main() {
@@ -79,8 +78,6 @@ type app struct {
 	state trayui.State
 
 	title    *systray.MenuItem
-	account  *systray.MenuItem
-	details  []*systray.MenuItem
 	syncRow  *systray.MenuItem
 	syncSub  []*systray.MenuItem
 	pause    *systray.MenuItem
@@ -116,18 +113,13 @@ func (a *app) onReady() {
 	a.title.SetIcon(trayui.BrandIcon(true))
 	systray.AddSeparator()
 
-	// Two summary rows, each opening a submenu, instead of a stack of figures:
-	// a tray menu is read at a glance, and the detail is one hover away.
+	// One summary row with a submenu: what the folder sync is doing, with a line
+	// per pair one hover away. Who is signed in is not here — that is the
+	// settings window's job.
 	//
-	// Nothing here is disabled. A disabled item renders grey, which Windows
-	// means as "unavailable" — wrong for a row whose whole job is to be read.
-	// They simply have no click handler.
-	a.account = systray.AddMenuItem("", "Account and storage")
-	for range detailSlots {
-		item := a.account.AddSubMenuItem("", "")
-		item.Hide()
-		a.details = append(a.details, item)
-	}
+	// The row is not disabled. A disabled item renders grey, which Windows means
+	// as "unavailable" — wrong for a row whose whole job is to be read. It
+	// simply has no click handler.
 	a.syncRow = systray.AddMenuItem("", "Folder sync")
 	for range detailSlots {
 		item := a.syncRow.AddSubMenuItem("", "")
@@ -194,7 +186,7 @@ func (a *app) loop() {
 	}
 }
 
-// reload re-reads the session and, when there is one, the account state.
+// reload re-reads the session and, when there is one, checks it is still good.
 // syncChanged repaints the menu from the current state after a pair starts or
 // finishes, so "syncing…" appears while it is true rather than at the next
 // scheduled refresh.
@@ -222,13 +214,14 @@ func (a *app) reload() {
 
 	state.LoggedIn = true
 	state.ServerURL = sess.ServerURL
-	state.UserName = sess.UserName
-	state.UserEmail = sess.UserEmail
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 
-	user, usage, wipe, err := client.Me(ctx)
+	// The response body is not rendered anywhere; the call is made for its
+	// verdict — a 401 means this device was revoked, and the wipe flag is the
+	// remote kill switch.
+	_, _, wipe, err := client.Me(ctx)
 	switch {
 	case err != nil && api.Status(err) == 401:
 		// The device was revoked from the web, or the token expired: drop the
@@ -252,9 +245,6 @@ func (a *app) reload() {
 		return
 	}
 
-	state.UserName = user.Name
-	state.UserEmail = user.Email
-	state.Usage = usage
 	a.setState(state)
 }
 
@@ -281,12 +271,6 @@ func (a *app) setState(s trayui.State) {
 	systray.SetIcon(trayui.StateIcon(iconState(m)))
 	systray.SetTooltip(m.Tooltip)
 	a.title.SetTitle(m.Title)
-
-	setVisible(a.account, m.ShowAccount)
-	if m.ShowAccount {
-		a.account.SetTitle(m.Account)
-	}
-	fillSlots(a.details, m.AccountDetails)
 
 	setVisible(a.syncRow, m.ShowSyncRow)
 	if m.ShowSyncRow {

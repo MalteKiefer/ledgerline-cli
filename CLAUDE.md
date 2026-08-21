@@ -532,10 +532,16 @@ a future desktop sync client), but nothing is CLI-less by design any more.
   and not in the one already on screen — the honest limit of not re-rendering a
   live page.
 
-  Two things moved out of the tray menu while the window existed to hold them:
-  the **avatar** and the **storage figures**, now a two-tone bar with the files
-  and gallery split beside it. A tray menu is read at a glance; four numbers
-  behind a hover were four numbers nobody read. The folder list lost its em
+  The tray menu gave up its identity half to the window entirely: first the
+  **avatar** and the **storage figures** (now a two-tone bar with the files and
+  gallery split beside it), then the account row and its submenu — name, e-mail,
+  server. A tray menu is read at a glance, four numbers behind a hover were four
+  numbers nobody read, and the menu is also on screen for anyone walking past
+  the machine. `trayui.State` lost `UserName`, `UserEmail` and `Usage` with it:
+  the `/me` refresh still runs — it is how a revoked device and a remote wipe
+  are noticed — but its identity half now stops at the caller instead of
+  travelling to a renderer that would drop it. Two orphans went with the row,
+  `ICOFromAvatar` and `StorageLine`, which only their tests still called. The folder list lost its em
   dashes with the rest of the widget — a dash between a path and its state reads
   as a correction, not a label.
 

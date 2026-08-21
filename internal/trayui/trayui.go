@@ -5,25 +5,22 @@
 package trayui
 
 import (
-	"errors"
-	"fmt"
 	"net/url"
 	"strings"
-
-	"github.com/MalteKiefer/ledgerline-cli/internal/api"
-	"github.com/MalteKiefer/ledgerline-cli/internal/ui"
 )
 
-// State is everything the tray renders from: who we are, where the server is,
-// how much storage is used, and whether the last refresh failed.
+// State is everything the tray renders from: whether there is a session, where
+// the server is, and whether the last refresh failed.
+//
+// It carries no name, no e-mail and no storage figure, because the menu shows
+// none of those. The refresh that would have supplied them still happens — it
+// is how a revoked device and a remote wipe are noticed — but its identity half
+// stops here rather than travelling to a renderer that would drop it.
 type State struct {
 	Version     string
 	LoggedIn    bool
 	ServerURL   string
-	UserName    string
-	UserEmail   string
-	Usage       api.Usage
-	Err         error // last refresh error, shown instead of stale numbers
+	Err         error // last refresh error
 	Unreachable bool  // the server could not be reached (offline, DNS, TLS)
 
 	Sync SyncState // what the folder sync is doing
@@ -32,22 +29,20 @@ type State struct {
 // Model is the rendered menu. The systray wiring maps it onto menu items 1:1,
 // so a change in what the user sees is a change here, not in UI plumbing.
 //
-// The shape is two summary rows, each with a submenu. A tray menu is read at a
-// glance while something else has the user's attention; five stacked figures at
-// the top level is a wall of text, and the details are one hover away.
+// It says what the program is doing, not who is using it. Identity — the name,
+// the e-mail, the server, the storage — belongs in the settings window, which
+// can show it as a profile rather than as rows of text behind a hover; a tray
+// menu is read at a glance while something else has the user's attention, and
+// it is also on screen for anyone walking past the machine.
 type Model struct {
 	Title   string // window/tooltip title, e.g. "Ledgerline 0.7.5"
 	Tooltip string
 
-	Account        string   // the row: who is signed in
-	AccountDetails []string // its submenu: e-mail, server, storage
-
 	SyncSummary string   // the row: what the folder sync is doing
 	SyncDetails []string // its submenu: one line per folder pair
 
-	Status string // a failure that replaces the figures, e.g. "Server unreachable"
+	Status string // a failure, e.g. "Server unreachable"
 
-	ShowAccount bool
 	ShowSyncRow bool
 	ShowStatus  bool
 	ShowLogin   bool
@@ -79,15 +74,10 @@ func Build(s State) Model {
 		return m
 	}
 
-	host := ServerHost(s.ServerURL)
-	name := nameLine(s.UserName, s.UserEmail)
-
 	m.ShowLogout = true
 	m.ShowSync = true
 	m.ShowRefresh = true
 	m.ShowOpenWeb = s.ServerURL != ""
-	m.ShowAccount = true
-	m.Account = name
 	m.Busy = s.Sync.Phase == SyncRunning
 
 	// The sync row is shown whenever signed in, including with no folders: "no
@@ -97,8 +87,8 @@ func Build(s State) Model {
 	m.SyncSummary = s.Sync.SyncLine()
 	m.SyncDetails = s.Sync.SyncDetails()
 
-	// A failed refresh must not be dressed up as fresh data: say so, keep the
-	// identity we know, and drop the numbers we cannot vouch for.
+	// A failed refresh must not be dressed up as fresh data: say so, and keep it
+	// to what went wrong rather than to who it went wrong for.
 	if s.Err != nil {
 		m.Offline = true
 		m.ShowStatus = true
@@ -106,30 +96,14 @@ func Build(s State) Model {
 		if !s.Unreachable {
 			m.Status = "Error: " + firstLine(s.Err.Error())
 		}
-		m.AccountDetails = detailRows(s.UserEmail, name, host)
 		m.Tooltip += " — " + m.Status
 		return m
 	}
 
-	// Storage lives in the settings window, not here. A tray menu is read at a
-	// glance, and four figures behind a hover are four things nobody reads; the
-	// window can draw the same numbers as a bar with the split beside it.
-	m.AccountDetails = detailRows(s.UserEmail, name, host)
-	m.Tooltip += " — " + name + " @ " + host
 	if m.Busy {
 		m.Tooltip += " — syncing"
 	}
 	return m
-}
-
-// detailRows is the fixed head of the account submenu: the e-mail (when it adds
-// something the row does not already say) and the server.
-func detailRows(email, shown, host string) []string {
-	rows := make([]string, 0, 4)
-	if email != "" && email != shown {
-		rows = append(rows, email)
-	}
-	return append(rows, "Server: "+host)
 }
 
 // displayVersion normalises the build stamp for display; an unstamped dev build
@@ -140,18 +114,6 @@ func displayVersion(v string) string {
 		return "dev"
 	}
 	return strings.TrimPrefix(v, "v")
-}
-
-// nameLine prefers the display name and falls back to the e-mail, so the menu
-// always identifies the account even for a profile without a name.
-func nameLine(name, email string) string {
-	if strings.TrimSpace(name) != "" {
-		return name
-	}
-	if strings.TrimSpace(email) != "" {
-		return email
-	}
-	return "Signed in"
 }
 
 // ServerHost reduces a server URL to the host (with port when non-default), the
@@ -169,20 +131,6 @@ func ServerHost(raw string) string {
 	return u.Host
 }
 
-// StorageLine renders the combined usage as "1.4 GiB of 10.0 GiB (14%)", or
-// without the quota part when the account is unlimited.
-func StorageLine(u api.Usage) string {
-	used := u.Total()
-	if u.Quota == nil || *u.Quota <= 0 {
-		return ui.HumanBytes(used) + " used"
-	}
-	pct := float64(used) / float64(*u.Quota) * 100
-	if pct > 999 {
-		pct = 999
-	}
-	return fmt.Sprintf("%s of %s (%.0f%%)", ui.HumanBytes(used), ui.HumanBytes(*u.Quota), pct)
-}
-
 // firstLine keeps a menu entry to one line: an API error can carry a long body.
 func firstLine(s string) string {
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
@@ -194,6 +142,3 @@ func firstLine(s string) string {
 	}
 	return s
 }
-
-// ErrNoAvatar reports that no usable avatar image was available.
-var ErrNoAvatar = errors.New("trayui: no avatar")

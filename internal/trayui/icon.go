@@ -6,8 +6,6 @@ import (
 	"errors"
 	"image"
 	"image/draw"
-	_ "image/gif"  // avatars are re-encoded server-side, but accept what it sends
-	_ "image/jpeg" // ...
 	"image/png"
 	"math"
 )
@@ -26,7 +24,7 @@ const IconSize = 16
 // bottom-up BMP with an AND mask — fewer places to get transparency wrong.
 func ICOFromImage(img image.Image, size int) ([]byte, error) {
 	if img == nil {
-		return nil, ErrNoAvatar
+		return nil, errors.New("trayui: no image")
 	}
 	if size <= 0 || size > 256 {
 		size = IconSize
@@ -64,42 +62,6 @@ func ICOFromImage(img image.Image, size int) ([]byte, error) {
 	write(uint32(icoHeaderLen))  // offset of the payload
 	out.Write(payload.Bytes())
 	return out.Bytes(), nil
-}
-
-// ICOFromAvatar decodes avatar bytes (whatever image format the server stored)
-// and returns a menu-sized .ico. It returns ErrNoAvatar for empty input so the
-// caller can fall back to initials without special-casing.
-func ICOFromAvatar(avatar []byte) ([]byte, error) {
-	if len(avatar) == 0 {
-		return nil, ErrNoAvatar
-	}
-	img, _, err := image.Decode(bytes.NewReader(avatar))
-	if err != nil {
-		return nil, err
-	}
-	return ICOFromImage(cropSquare(img), IconSize)
-}
-
-// cropSquare centre-crops to a square so a non-square avatar is not squashed
-// when scaled down.
-func cropSquare(img image.Image) image.Image {
-	b := img.Bounds()
-	w, h := b.Dx(), b.Dy()
-	if w == h {
-		return img
-	}
-	side := min(w, h)
-	x0 := b.Min.X + (w-side)/2
-	y0 := b.Min.Y + (h-side)/2
-	rect := image.Rect(x0, y0, x0+side, y0+side)
-	if sub, ok := img.(interface {
-		SubImage(image.Rectangle) image.Image
-	}); ok {
-		return sub.SubImage(rect)
-	}
-	dst := image.NewNRGBA(image.Rect(0, 0, side, side))
-	draw.Draw(dst, dst.Bounds(), img, rect.Min, draw.Src)
-	return dst
 }
 
 // scaleSquare resamples to size x size with a box filter. The standard library

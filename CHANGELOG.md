@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The tray menu no longer shows who you are.** Your name, e-mail, server and
+  storage were a row with a submenu at the top of the menu; they are in Settings,
+  which has room to show them as a profile. A tray menu is read at a glance —
+  and it is on screen for anyone walking past the machine. What is left is the
+  version, what the folder sync is doing, and the actions.
+
 - **A real browser for picking a folder on the server.** Adding a synced folder,
   or uploading from the right-click menu, used to show every folder path in one
   flat list — readable with six folders, useless with two hundred. It is now a
