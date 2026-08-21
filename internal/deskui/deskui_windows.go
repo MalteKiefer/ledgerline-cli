@@ -74,7 +74,15 @@ func Run(opts Options) error {
 	// Every page gets a way to dismiss itself. window.close() is not reliable
 	// for a control that was not opened by script, and a page cannot reach the
 	// message loop any other way.
-	if err := w.Bind("closeWindow", func() { w.Terminate() }); err != nil {
+	//
+	// WM_CLOSE rather than the library's Terminate: that calls
+	// PostQuitMessage, which posts to the *calling* thread's queue, and a
+	// binding callback is not guaranteed to run on the thread pumping messages.
+	// When it does not, the quit lands in a queue nobody reads and the Close
+	// button does nothing. Posting to the window works from any thread, and the
+	// library's own window procedure turns WM_CLOSE into the same shutdown.
+	handle := w.Window()
+	if err := w.Bind("closeWindow", func() { postClose(handle) }); err != nil {
 		return fmt.Errorf("bind closeWindow: %w", err)
 	}
 	for _, b := range opts.Bindings {
@@ -83,7 +91,7 @@ func Run(opts Options) error {
 		}
 	}
 
-	decorate(w.Window())
+	decorate(handle)
 	w.SetHtml(page(opts))
 	w.Run()
 	return nil
@@ -120,9 +128,11 @@ var (
 	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 	procExtractIconEx         = shell32.NewProc("ExtractIconExW")
 	procSendMessage           = user32.NewProc("SendMessageW")
+	procPostMessage           = user32.NewProc("PostMessageW")
 )
 
 const (
+	wmClose          = 0x0010
 	dwmDarkMode      = 20
 	dwmDarkModePre   = 19
 	dwmCornerPolicy  = 33
@@ -161,4 +171,12 @@ func decorate(handle unsafe.Pointer) {
 		_, _, _ = procSendMessage.Call(uintptr(hwnd), wmSetIcon, iconBig, uintptr(big))
 		_, _, _ = procSendMessage.Call(uintptr(hwnd), wmSetIcon, iconSmall, uintptr(small))
 	}
+}
+
+// postClose asks the window to shut down, from any thread.
+func postClose(handle unsafe.Pointer) {
+	if handle == nil {
+		return
+	}
+	_, _, _ = procPostMessage.Call(uintptr(handle), wmClose, 0, 0)
 }

@@ -38,8 +38,10 @@ func SetLaunchAtLogin(on bool) error {
 	defer k.Close()
 
 	if !on {
-		err := k.DeleteValue(runValue)
-		if err != nil && !strings.Contains(err.Error(), "cannot find") {
+		// Absent is the goal, so "there was nothing to delete" is success —
+		// tested by code rather than by message, because Windows localises the
+		// text and this ran on a German install.
+		if err := k.DeleteValue(runValue); err != nil && !isNotFound(err) {
 			return fmt.Errorf("remove Run entry: %w", err)
 		}
 		return nil

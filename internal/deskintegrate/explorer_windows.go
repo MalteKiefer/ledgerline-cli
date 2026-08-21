@@ -3,8 +3,10 @@
 package deskintegrate
 
 import (
+	"errors"
 	"fmt"
-	"strings"
+	"io/fs"
+	"syscall"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -200,10 +202,21 @@ func deleteTree(path string) error {
 
 // isNotFound reports the registry's "no such key or value", which every removal
 // path treats as success.
+//
+// Matched on the error code, not the message. Windows returns its errors in the
+// user's language, so comparing text worked on an English install and silently
+// failed on every other one: on a German system the first registration aborted
+// because deleting a store that was not there yet did not read as "not there".
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "cannot find") ||
-		strings.Contains(strings.ToLower(err.Error()), "does not exist")
+	if errors.Is(err, registry.ErrNotExist) || errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno == syscall.ERROR_FILE_NOT_FOUND || errno == syscall.ERROR_PATH_NOT_FOUND
+	}
+	return false
 }
