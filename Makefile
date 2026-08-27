@@ -251,10 +251,12 @@ sbom-verify: sbom-tool
 	@# (the CycloneDX-gomod BINARY's own MD5/SHA*, which differ per machine and
 	@# toolchain patch and are not part of our dependency graph); the main module's own git pseudo-version
 	@# (moves every commit; the pinned deps are all tagged releases, so any
-	@# 0.0.0-<date>-<hash> pseudo-version line is the main module). The point is to
-	@# catch DEPENDENCY drift, not these.
-	@jq 'del(.metadata.timestamp, .metadata.tools)' sbom.json     | grep -Ev '(ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' > sbom.a.tmp
-	@jq 'del(.metadata.timestamp, .metadata.tools)' sbom.new.json | grep -Ev '(ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' > sbom.b.tmp
+	@# 0.0.0-<date>-<hash> pseudo-version line is the main module). A tagged
+	@# checkout also adds metadata.component.version (for example v0.8.0), while
+	@# the same source on its branch has no version; that is build provenance,
+	@# not dependency drift, so normalise it too.
+	@jq 'del(.metadata.timestamp, .metadata.tools, .metadata.component.version)' sbom.json     | grep -Ev '(ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' > sbom.a.tmp
+	@jq 'del(.metadata.timestamp, .metadata.tools, .metadata.component.version)' sbom.new.json | grep -Ev '(ledgerline-cli@|[0-9]{14}-[0-9a-f]{12})' > sbom.b.tmp
 	@if ! diff -u sbom.a.tmp sbom.b.tmp; then \
 		rm -f sbom.new.json sbom.a.tmp sbom.b.tmp; \
 		echo "SBOM drift: regenerate with 'make sbom' and commit the change"; exit 1; \
