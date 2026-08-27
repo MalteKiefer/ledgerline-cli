@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Resumable Gallery and Files exports.** `gallery download --all --out DIR`
+  follows every gallery page and downloads the full-resolution edited rendition
+  (falling back to original bytes when unchanged). `files download --all --out
+  DIR` recreates the complete remote folder tree. Both skip existing files,
+  write new downloads atomically, continue after individual failures, and show
+  live progress in an interactive terminal.
+
 - **The tray menu no longer shows who you are.** Your name, e-mail, server and
   storage were a row with a submenu at the top of the menu; they are in Settings,
   which has room to show them as a profile. A tray menu is read at a glance —

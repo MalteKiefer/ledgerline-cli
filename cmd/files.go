@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -220,18 +223,24 @@ func newFilesLsCommand() *cobra.Command {
 	}
 }
 
-// newFilesDownloadCommand downloads files by id.
+// newFilesDownloadCommand downloads files by id or incrementally exports the
+// complete remote tree while preserving its folder hierarchy.
 func newFilesDownloadCommand() *cobra.Command {
 	var outDir string
+	var all bool
 	cmd := &cobra.Command{
-		Use:   "download <id...>",
-		Short: "Download files by id",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ids, err := parseIDs(args)
-			if err != nil {
-				return err
+		Use:   "download <id...> | --all",
+		Short: "Download files by id or all missing files",
+		Args: func(_ *cobra.Command, args []string) error {
+			switch {
+			case all && len(args) > 0:
+				return fmt.Errorf("pass either file ids or --all, not both")
+			case !all && len(args) == 0:
+				return fmt.Errorf("pass at least one file id or --all")
 			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := authedClient(cmd.Context())
 			if err != nil {
 				return err
@@ -242,39 +251,139 @@ func newFilesDownloadCommand() *cobra.Command {
 			if err := os.MkdirAll(outDir, 0o750); err != nil {
 				return err
 			}
-			names := map[int64]string{}
-			if _, entries, _, lerr := client.FilesData(cmd.Context()); lerr == nil {
-				for _, e := range entries {
-					names[e.ID] = e.Name
-				}
+			folders, entries, _, err := client.FilesData(cmd.Context())
+			if err != nil {
+				return err
 			}
+			downloads := buildFileDownloads(folders, entries)
+			if !all {
+				ids, perr := parseIDs(args)
+				if perr != nil {
+					return perr
+				}
+				downloads = selectFileDownloads(ids, downloads)
+			}
+
 			out := cmd.OutOrStdout()
-			for _, id := range ids {
-				name := names[id]
-				if name == "" {
-					name = strconv.FormatInt(id, 10)
+			bar := ui.NewProgressBar(out, len(downloads), ui.IsTTY(out))
+			var downloaded, skipped, failed int
+			for i, item := range downloads {
+				dest := filepath.Join(outDir, filepath.FromSlash(item.rel))
+				if all {
+					if _, serr := os.Stat(dest); serr == nil {
+						skipped++
+						bar.Println(fmt.Sprintf("skip       %s (already exists)", item.rel))
+						bar.Update(i+1, item.rel)
+						continue
+					} else if !os.IsNotExist(serr) {
+						failed++
+						bar.Println(fmt.Sprintf("failed     %s: %v", item.rel, serr))
+						bar.Update(i+1, item.rel)
+						continue
+					}
 				}
-				dest := filepath.Join(outDir, name)
-				if derr := downloadFileTo(cmd.Context(), client, id, dest); derr != nil {
-					return fmt.Errorf("download %d: %w", id, derr)
+				if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+					failed++
+					bar.Println(fmt.Sprintf("failed     %s: %v", item.rel, err))
+					bar.Update(i+1, item.rel)
+					continue
 				}
-				fmt.Fprintf(out, "downloaded %s\n", dest)
+				if derr := downloadFileTo(cmd.Context(), client, item.id, dest); derr != nil {
+					failed++
+					bar.Println(fmt.Sprintf("failed     %s: %v", item.rel, derr))
+				} else {
+					downloaded++
+					bar.Println(fmt.Sprintf("downloaded %s", item.rel))
+				}
+				bar.Update(i+1, item.rel)
+			}
+			bar.Finish()
+			fmt.Fprintf(out, "Done: %d downloaded, %d skipped, %d failed.\n", downloaded, skipped, failed)
+			if failed > 0 {
+				return fmt.Errorf("%d file(s) failed to download", failed)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&outDir, "out", ".", "directory to write downloads into")
+	cmd.Flags().BoolVar(&all, "all", false, "download every missing file and preserve the remote folder tree")
 	return cmd
+}
+
+type fileDownload struct {
+	id  int64
+	rel string
+}
+
+func buildFileDownloads(folders []api.FileFolder, entries []api.FileEntry) []fileDownload {
+	byID := make(map[int64]api.FileFolder, len(folders))
+	for _, folder := range folders {
+		byID[folder.ID] = folder
+	}
+	downloads := make([]fileDownload, 0, len(entries))
+	for _, entry := range entries {
+		parts := folderParts(entry.FileFolderID, byID, map[int64]bool{})
+		parts = append(parts, safeRemoteName(entry.Name, strconv.FormatInt(entry.ID, 10)))
+		downloads = append(downloads, fileDownload{id: entry.ID, rel: path.Join(parts...)})
+	}
+	sort.Slice(downloads, func(i, j int) bool { return downloads[i].rel < downloads[j].rel })
+	return downloads
+}
+
+func folderParts(id *int64, byID map[int64]api.FileFolder, seen map[int64]bool) []string {
+	if id == nil || seen[*id] {
+		return nil
+	}
+	seen[*id] = true
+	folder, ok := byID[*id]
+	if !ok {
+		return nil
+	}
+	return append(folderParts(folder.ParentID, byID, seen), safeRemoteName(folder.Name, strconv.FormatInt(folder.ID, 10)))
+}
+
+func selectFileDownloads(ids []int64, listed []fileDownload) []fileDownload {
+	byID := make(map[int64]fileDownload, len(listed))
+	for _, item := range listed {
+		byID[item.id] = item
+	}
+	downloads := make([]fileDownload, 0, len(ids))
+	for _, id := range ids {
+		item, ok := byID[id]
+		if !ok {
+			item = fileDownload{id: id, rel: strconv.FormatInt(id, 10)}
+		} else {
+			item.rel = path.Base(item.rel)
+		}
+		downloads = append(downloads, item)
+	}
+	return downloads
+}
+
+func safeRemoteName(name, fallback string) string {
+	name = path.Base(strings.ReplaceAll(name, `\`, "/"))
+	if name == "" || name == "." || name == "/" {
+		return fallback
+	}
+	return name
 }
 
 // downloadFileTo streams one file to a destination path.
 func downloadFileTo(ctx context.Context, client *api.Client, id int64, dest string) error {
-	f, err := os.Create(dest)
+	f, err := os.CreateTemp(filepath.Dir(dest), ".ledgerline-download-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return client.DownloadFile(ctx, id, f)
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := client.DownloadFile(ctx, id, f); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
 }
 
 // newFilesRmCommand trashes files by id.

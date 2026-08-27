@@ -257,7 +257,7 @@ gallery rm <id...>                trash (bulk when >1)
 files upload <file...>            multipart upload; >64 MiB auto-switches to the
                                   chunked session (--no-chunked forces one body)
 files ls                          folder/file tree + usage
-files download <id...>            raw bytes (--out)
+files download <id...>|--all      raw bytes; --all preserves folders, skips existing files and shows progress
 files rm <id...>                  trash a file
 files mkdir <name>                create folder (--parent)
 files sync <dir>                  two-way sync (--direction, --conflict, --interval, --service)

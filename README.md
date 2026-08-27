@@ -272,6 +272,7 @@ Use `--variant original` only when untouched source bytes are required.
 ```sh
 ledgerline-cli files ls                                  # whole tree + usage
 ledgerline-cli files upload <file...> [--folder ID] [--jobs 4] [--no-chunked]
+ledgerline-cli files download --all [--out DIR]          # complete resumable tree export
 ledgerline-cli files download <id...> [--out DIR]
 ledgerline-cli files mkdir <name> [--parent ID]
 ledgerline-cli files rm <id...>                           # trash
@@ -284,6 +285,11 @@ ledgerline-cli files activity [--file ID]
 a re-run is cheap and cross-host. Files over 64 MiB automatically go through the
 chunked-upload session, where a failed transfer only costs the current part;
 `--no-chunked` forces a single multipart body.
+
+`files download --all` recreates the complete remote folder tree below `--out`.
+Existing files are left untouched, completed downloads are renamed into place
+atomically, and one failed transfer does not stop the remaining files. A TTY
+shows the same live percentage and item counter as the gallery export.
 
 ### `files sync`
 
