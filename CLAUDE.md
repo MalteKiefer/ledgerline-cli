@@ -78,7 +78,9 @@ WebDAV endpoint the OS can mount.
 
 **Gallery** (`internal/api/gallery.go`) stays minimal — unchanged from the
 plaintext pivot:
-- `GET /gallery/data` → `{photos:[GalleryPhoto]}` (list, no bytes).
+- `GET /gallery/data?limit=500&cursor=…` → paginated
+  `{photos:[GalleryPhoto],next_cursor}` (list, no bytes); `ListPhotos` follows
+  every cursor so CLI consumers see the complete library.
 - `POST /gallery` (multipart `file`) → `{photo}`; HTTP 200 + `duplicate:true` on a
   sha256 match, 201 on a new row.
 - `GET /gallery/{id}/download?variant=original|edited` → raw bytes.
@@ -250,7 +252,7 @@ auth login|logout|status          device pairing -> bearer; identity; revoke
 status                            local build info + update check
 gallery upload <path...>          multipart upload (files/dirs, --jobs)
 gallery list                      photo/video list
-gallery download <id...>          originals (--out, --variant)
+gallery download <id...>|--all    edited rendition by default; --all skips existing images and shows progress
 gallery rm <id...>                trash (bulk when >1)
 files upload <file...>            multipart upload; >64 MiB auto-switches to the
                                   chunked session (--no-chunked forces one body)

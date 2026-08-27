@@ -11,12 +11,30 @@ import (
 	"testing"
 )
 
-func TestListPhotosDecodes(t *testing.T) {
+func TestListPhotosFetchesEveryPage(t *testing.T) {
+	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.URL.Path != "/api/v1/gallery/data" {
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"photos":[{"id":7,"name":"a.jpg","size":123,"media_type":"image"}]}`))
+		requests++
+		if r.URL.Query().Get("limit") != "500" {
+			t.Fatalf("limit = %q, want 500", r.URL.Query().Get("limit"))
+		}
+		switch requests {
+		case 1:
+			if got := r.URL.Query().Get("cursor"); got != "" {
+				t.Fatalf("first cursor = %q, want empty", got)
+			}
+			_, _ = w.Write([]byte(`{"photos":[{"id":7,"name":"a.jpg","size":123,"media_type":"image"}],"next_cursor":"page-2"}`))
+		case 2:
+			if got := r.URL.Query().Get("cursor"); got != "page-2" {
+				t.Fatalf("second cursor = %q, want page-2", got)
+			}
+			_, _ = w.Write([]byte(`{"photos":[{"id":8,"name":"b.jpg","size":456,"media_type":"image"}],"next_cursor":null}`))
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
 	}))
 	defer srv.Close()
 
@@ -25,7 +43,7 @@ func TestListPhotosDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(photos) != 1 || photos[0].ID != 7 || photos[0].Name != "a.jpg" {
+	if len(photos) != 2 || photos[0].ID != 7 || photos[1].ID != 8 {
 		t.Fatalf("photos = %+v", photos)
 	}
 }

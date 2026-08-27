@@ -178,17 +178,26 @@ func whenTaken(p api.GalleryPhoto) string {
 	return ""
 }
 
-// newGalleryDownloadCommand downloads originals by id.
+// newGalleryDownloadCommand downloads selected photos or incrementally exports
+// every image in the gallery. Edited is the default server-side rendition.
 func newGalleryDownloadCommand() *cobra.Command {
 	var outDir, variant string
+	var all bool
 	cmd := &cobra.Command{
-		Use:   "download <id...>",
-		Short: "Download photo/video originals by id",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "download <id...> | --all",
+		Short: "Download edited photos by id or all missing gallery images",
+		Args: func(_ *cobra.Command, args []string) error {
+			switch {
+			case all && len(args) > 0:
+				return fmt.Errorf("pass either photo ids or --all, not both")
+			case !all && len(args) == 0:
+				return fmt.Errorf("pass at least one photo id or --all")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ids, err := parseIDs(args)
-			if err != nil {
-				return err
+			if variant != "original" && variant != "edited" {
+				return fmt.Errorf("invalid --variant %q (original|edited)", variant)
 			}
 			client, err := authedClient(cmd.Context())
 			if err != nil {
@@ -200,41 +209,104 @@ func newGalleryDownloadCommand() *cobra.Command {
 			if err := os.MkdirAll(outDir, 0o750); err != nil {
 				return err
 			}
-			// Resolve names once so downloads land under their real file names.
-			names := map[int64]string{}
-			if photos, lerr := client.ListPhotos(cmd.Context()); lerr == nil {
-				for _, p := range photos {
-					names[p.ID] = p.Name
-				}
+			photos, err := client.ListPhotos(cmd.Context())
+			if err != nil {
+				return err
 			}
+			if !all {
+				ids, perr := parseIDs(args)
+				if perr != nil {
+					return perr
+				}
+				photos = selectPhotos(ids, photos)
+			} else {
+				images := photos[:0]
+				for _, photo := range photos {
+					if photo.MediaType == "image" {
+						images = append(images, photo)
+					}
+				}
+				photos = images
+			}
+
 			out := cmd.OutOrStdout()
-			for _, id := range ids {
-				name := names[id]
-				if name == "" {
-					name = strconv.FormatInt(id, 10)
+			bar := ui.NewProgressBar(out, len(photos), ui.IsTTY(out))
+			var downloaded, skipped, failed int
+			for i, photo := range photos {
+				name := filepath.Base(photo.Name)
+				if name == "." || name == "" {
+					name = strconv.FormatInt(photo.ID, 10)
 				}
 				dest := filepath.Join(outDir, name)
-				if derr := downloadPhotoTo(cmd.Context(), client, id, variant, dest); derr != nil {
-					return fmt.Errorf("download %d: %w", id, derr)
+				if all {
+					if _, serr := os.Stat(dest); serr == nil {
+						skipped++
+						bar.Println(fmt.Sprintf("skip       %s (already exists)", name))
+						bar.Update(i+1, name)
+						continue
+					} else if !os.IsNotExist(serr) {
+						failed++
+						bar.Println(fmt.Sprintf("failed     %s: %v", name, serr))
+						bar.Update(i+1, name)
+						continue
+					}
 				}
-				fmt.Fprintf(out, "downloaded %s\n", dest)
+				if derr := downloadPhotoTo(cmd.Context(), client, photo.ID, variant, dest); derr != nil {
+					failed++
+					bar.Println(fmt.Sprintf("failed     %s: %v", name, derr))
+				} else {
+					downloaded++
+					bar.Println(fmt.Sprintf("downloaded %s", name))
+				}
+				bar.Update(i+1, name)
+			}
+			bar.Finish()
+			fmt.Fprintf(out, "Done: %d downloaded, %d skipped, %d failed.\n", downloaded, skipped, failed)
+			if failed > 0 {
+				return fmt.Errorf("%d photo(s) failed to download", failed)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&outDir, "out", ".", "directory to write downloads into")
-	cmd.Flags().StringVar(&variant, "variant", "original", "which bytes to fetch: original or edited")
+	cmd.Flags().StringVar(&variant, "variant", "edited", "which bytes to fetch: edited or original")
+	cmd.Flags().BoolVar(&all, "all", false, "download every missing image in the gallery")
 	return cmd
+}
+
+// selectPhotos resolves requested ids while preserving the order from argv.
+func selectPhotos(ids []int64, listed []api.GalleryPhoto) []api.GalleryPhoto {
+	byID := make(map[int64]api.GalleryPhoto, len(listed))
+	for _, photo := range listed {
+		byID[photo.ID] = photo
+	}
+	photos := make([]api.GalleryPhoto, 0, len(ids))
+	for _, id := range ids {
+		photo, ok := byID[id]
+		if !ok {
+			photo = api.GalleryPhoto{ID: id, Name: strconv.FormatInt(id, 10)}
+		}
+		photos = append(photos, photo)
+	}
+	return photos
 }
 
 // downloadPhotoTo streams one photo to a destination file.
 func downloadPhotoTo(ctx context.Context, client *api.Client, id int64, variant, dest string) error {
-	f, err := os.Create(dest)
+	f, err := os.CreateTemp(filepath.Dir(dest), ".ledgerline-download-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return client.DownloadPhoto(ctx, id, variant, f)
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := client.DownloadPhoto(ctx, id, variant, f); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
 }
 
 // newGalleryRmCommand trashes photos by id.

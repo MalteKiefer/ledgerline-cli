@@ -250,7 +250,8 @@ ledgerline-cli devices wipe <id>
 ```sh
 ledgerline-cli gallery upload <path...> [--jobs 4] [--batch 50] [--force]
 ledgerline-cli gallery list
-ledgerline-cli gallery download <id...> [--out DIR] [--variant original|edited]
+ledgerline-cli gallery download --all [--out DIR] [--variant edited|original]
+ledgerline-cli gallery download <id...> [--out DIR] [--variant edited|original]
 ledgerline-cli gallery rm <id...>          # trash (bulk when more than one)
 ```
 
@@ -258,6 +259,13 @@ ledgerline-cli gallery rm <id...>          # trash (bulk when more than one)
 already sent — via a per-server ledger in the config directory. `--force`
 bypasses it, `--batch N` checkpoints the ledger every N uploads. Uploads show a
 progress bar on a TTY and plain per-line output when piped.
+
+`gallery download --all` walks every paginated gallery page and requests the
+full-resolution `edited` rendition, which bakes in rotation and mirroring and
+falls back to the original for an unchanged image. Files already present in the
+destination are skipped, making the export resumable. A terminal shows a live
+percentage and item counter; redirected output prints one result line per image.
+Use `--variant original` only when untouched source bytes are required.
 
 ### `files` — browsing and transfer
 

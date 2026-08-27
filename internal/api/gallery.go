@@ -39,13 +39,29 @@ type GalleryPhoto struct {
 // ListPhotos returns every photo for the current user (newest capture first),
 // without bytes. GET /gallery/data.
 func (c *Client) ListPhotos(ctx context.Context) ([]GalleryPhoto, error) {
-	var resp struct {
-		Photos []GalleryPhoto `json:"photos"`
+	var photos []GalleryPhoto
+	var cursor string
+	for {
+		query := url.Values{"limit": {"500"}}
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		var resp struct {
+			Photos     []GalleryPhoto `json:"photos"`
+			NextCursor *string        `json:"next_cursor"`
+		}
+		if err := c.request(ctx, "GET", "/api/v1/gallery/data?"+query.Encode(), nil, &resp); err != nil {
+			return nil, err
+		}
+		photos = append(photos, resp.Photos...)
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
+			return photos, nil
+		}
+		if *resp.NextCursor == cursor {
+			return nil, fmt.Errorf("gallery pagination returned the same cursor twice")
+		}
+		cursor = *resp.NextCursor
 	}
-	if err := c.request(ctx, "GET", "/api/v1/gallery/data", nil, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Photos, nil
 }
 
 // UploadPhoto uploads one image/video whole (multipart POST /gallery). The
